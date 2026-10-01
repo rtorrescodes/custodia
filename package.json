@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "graft:sync": "cd tools/graft && npm run cli -- build ../../"
+    "graft:sync": "powershell C:\\\\CODES\\\\shared-tools\\\\graft-sync.ps1",
+    "security:audit": "powershell C:\\\\CODES\\\\shared-tools\\\\trivy-scan.ps1"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
