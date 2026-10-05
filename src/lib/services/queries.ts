@@ -5,52 +5,37 @@ import { redirect } from 'next/navigation';
 import { resolveMembershipContext, MembershipContext } from '@/lib/auth/membership-guard';
 import { propertyService } from '@/lib/services/property-service';
 
+import { getVerifiedIdentity, VerifiedIdentity } from '@/lib/auth/identity';
+
 export async function getSessionAndTenant(requestedTenantId?: string): Promise<{
-  session: any;
+  session: { user: VerifiedIdentity['user'] };
   tenantId: string;
   membership: MembershipContext;
 }> {
   const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {}
-        },
-      },
-    }
-  );
+  const identity = await getVerifiedIdentity();
 
-  const { data: { session } } = await supabase.auth.getSession();
-
-  if (!session?.user) {
+  if (!identity) {
     redirect('/login');
   }
 
-  // Resolver tenant objetivo: solicitud del cliente -> cookie de org activa -> metadata legacy
+  // Resolver tenant objetivo: solicitud del cliente -> cookie de org activa -> metadata verificada
   const cookieTenant = cookieStore.get('custodia_active_tenant')?.value;
-  const targetTenantId = requestedTenantId || cookieTenant || (session.user.app_metadata?.tenantId as string);
+  const targetTenantId = requestedTenantId || cookieTenant || 
+    (identity.user.app_metadata?.tenantId as string) ||
+    (identity.user.user_metadata?.tenantId as string);
 
   if (!targetTenantId) {
     throw new Error("No tenant associated with this user.");
   }
 
   // Validación de autorización en servidor (Zero Trust)
-  const auth = await resolveMembershipContext(session.user.id, targetTenantId);
+  const auth = await resolveMembershipContext(identity.userId, targetTenantId);
   if (!auth.ok) {
     throw new Error(auth.error);
   }
 
-  return { session, tenantId: targetTenantId, membership: auth.context };
+  return { session: { user: identity.user }, tenantId: targetTenantId, membership: auth.context };
 }
 
 export async function getDashboardData(requestedTenantId?: string) {

@@ -38,7 +38,7 @@ export default function LoginPage() {
 
   function fillDemo(userEmail: string) {
     setEmail(userEmail)
-    setPassword("DemoCustodia2026!")
+    // Se rellena únicamente el correo público del rol. No se incrustan ni exponen contraseñas en el bundle cliente.
   }
 
   return (

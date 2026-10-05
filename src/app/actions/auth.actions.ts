@@ -37,9 +37,9 @@ export async function login(formData: FormData) {
     return { error: 'Credenciales inválidas.' }
   }
 
-  // Si el usuario tiene tenant asociado, inicializar la cookie activa con su tenant oficial
-  const { data: { session } } = await supabase.auth.getSession()
-  const defaultTenantId = session?.user?.app_metadata?.tenantId || session?.user?.user_metadata?.tenantId
+  // Si el usuario tiene tenant asociado, inicializar la cookie activa con su tenant oficial verificado
+  const { data: { user } } = await supabase.auth.getUser()
+  const defaultTenantId = user?.app_metadata?.tenantId || user?.user_metadata?.tenantId
   if (defaultTenantId) {
     cookieStore.set('custodia_active_tenant', defaultTenantId, { path: '/' })
   }

@@ -37,15 +37,18 @@ export async function safeAction<TInput, TOutput>(
       }
     );
 
-    const { data: { session }, error: authError } = await supabase.auth.getSession();
+    const { getVerifiedIdentity } = await import('@/lib/auth/identity');
+    const identity = await getVerifiedIdentity();
 
-    if (authError || !session?.user) {
-      return { success: false, error: 'No autorizado. Sesión requerida.' };
+    if (!identity) {
+      return { success: false, error: 'No autorizado. Sesión o token inválido.' };
     }
 
     // Resolver tenantId: cookie de organización activa -> app_metadata -> user_metadata
     const cookieTenant = cookieStore.get('custodia_active_tenant')?.value;
-    const targetTenantId = cookieTenant || (session.user.app_metadata?.tenantId as string) || (session.user.user_metadata?.tenantId as string);
+    const targetTenantId = cookieTenant || 
+      (identity.user.app_metadata?.tenantId as string) || 
+      (identity.user.user_metadata?.tenantId as string);
     
     if (!targetTenantId) {
       return { success: false, error: 'Usuario no asociado a un Tenant válido.' };
@@ -53,7 +56,7 @@ export async function safeAction<TInput, TOutput>(
 
     // Validación estricta de membresía en el servidor (Zero Trust)
     const { resolveMembershipContext } = await import('@/lib/auth/membership-guard');
-    const authContext = await resolveMembershipContext(session.user.id, targetTenantId);
+    const authContext = await resolveMembershipContext(identity.userId, targetTenantId);
     if (!authContext.ok) {
       return { success: false, error: authContext.error };
     }
@@ -62,7 +65,7 @@ export async function safeAction<TInput, TOutput>(
     const validatedData = schema.parse(input);
 
     // Ejecución segura
-    const result = await handler(validatedData, targetTenantId, session.user.id);
+    const result = await handler(validatedData, targetTenantId, identity.userId);
     return { success: true, data: result };
 
   } catch (error) {

@@ -8,26 +8,28 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "mock-key"
 export async function POST(req: Request) {
   try {
     const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() { return cookieStore.getAll() },
-          setAll(cookiesToSet) {
-            try { cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)) } catch {}
-          },
-        },
-      }
-    );
+    const { getVerifiedIdentity } = await import('@/lib/auth/identity');
+    const identity = await getVerifiedIdentity();
 
-    const { data: { session }, error: authError } = await supabase.auth.getSession();
-    if (authError || !session?.user) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    if (!identity) {
+      return NextResponse.json({ error: "No autorizado. Token inválido o ausente." }, { status: 401 });
     }
 
-    const tenantId = session.user.app_metadata?.tenantId as string;
-    const userId = session.user.id;
+    const cookieTenant = cookieStore.get('custodia_active_tenant')?.value;
+    const targetTenantId = cookieTenant || (identity.user.app_metadata?.tenantId as string);
+
+    if (!targetTenantId) {
+      return NextResponse.json({ error: "Tenant no provisto." }, { status: 400 });
+    }
+
+    const { resolveMembershipContext } = await import('@/lib/auth/membership-guard');
+    const authContext = await resolveMembershipContext(identity.userId, targetTenantId);
+    if (!authContext.ok) {
+      return NextResponse.json({ error: authContext.error }, { status: 403 });
+    }
+
+    const tenantId = targetTenantId;
+    const userId = identity.userId;
 
     const tenant = await prisma.tenant.findUnique({
       where: { id: tenantId },
