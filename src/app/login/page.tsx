@@ -143,14 +143,40 @@ export default function LoginPage() {
 
           <div className="my-6 flex items-center gap-3">
             <div className="h-px flex-1 bg-border" />
-            <span className="text-xs text-muted-foreground">o continúa con</span>
+            <span className="text-xs text-muted-foreground font-semibold uppercase">Acceso Rápido a Demo</span>
             <div className="h-px flex-1 bg-border" />
           </div>
 
-          <Button variant="outline" className="h-11 w-full rounded-xl">
-            <GoogleIcon />
-            Google
-          </Button>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 text-xs font-medium border-primary/30 hover:bg-primary/5"
+              onClick={async () => {
+                const fd = new FormData();
+                fd.append("email", "casero@demo.custodia.app");
+                fd.append("password", "demo");
+                const { login } = await import("@/app/actions/auth.actions");
+                await login(fd);
+              }}
+            >
+              🏡 Casero Directo
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 text-xs font-medium border-blue-500/30 hover:bg-blue-500/5"
+              onClick={async () => {
+                const fd = new FormData();
+                fd.append("email", "pm@demo.custodia.app");
+                fd.append("password", "demo");
+                const { login } = await import("@/app/actions/auth.actions");
+                await login(fd);
+              }}
+            >
+              🏢 Property Manager
+            </Button>
+          </div>
 
           <p className="mt-8 text-center text-sm text-muted-foreground">
             {modo === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}

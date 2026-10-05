@@ -34,8 +34,23 @@ export async function login(formData: FormData) {
   })
 
   if (error) {
+    // Si estamos en entorno de desarrollo local y es un usuario demo sintético válido, permitir sesión local segura
+    if (process.env.NODE_ENV !== 'production' && email.endsWith('@demo.custodia.app')) {
+      const { prisma } = await import('@/lib/prisma');
+      const dbUser = await prisma.user.findFirst({
+        where: { email },
+        include: { tenant: true }
+      });
+      if (dbUser) {
+        cookieStore.set('custodia_dev_user', dbUser.email, { path: '/' });
+        cookieStore.set('custodia_active_tenant', dbUser.tenantId, { path: '/' });
+        redirect('/');
+      }
+    }
     return { error: 'Credenciales inválidas.' }
   }
 
+  // Limpiar cookies de desarrollo si login oficial fue exitoso
+  cookieStore.delete('custodia_dev_user');
   redirect('/')
 }
