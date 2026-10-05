@@ -30,29 +30,7 @@ export async function getSessionAndTenant(requestedTenantId?: string): Promise<{
     }
   );
 
-  let { data: { session } } = await supabase.auth.getSession();
-
-  // En entorno local de desarrollo, soportar sesión demo autenticada por cookie si no hay sesión GoTrue activa
-  if (!session?.user && process.env.NODE_ENV !== 'production') {
-    const devUserEmail = cookieStore.get('custodia_dev_user')?.value;
-    if (devUserEmail) {
-      const dbUser = await withTenantRLS('', async (tx) => {
-        return tx.user.findFirst({
-          where: { email: devUserEmail },
-          include: { tenant: true }
-        });
-      });
-      if (dbUser) {
-        session = {
-          user: {
-            id: dbUser.id,
-            email: dbUser.email,
-            app_metadata: { tenantId: dbUser.tenantId },
-          }
-        } as any;
-      }
-    }
-  }
+  const { data: { session } } = await supabase.auth.getSession();
 
   if (!session?.user) {
     redirect('/login');

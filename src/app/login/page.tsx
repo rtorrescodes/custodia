@@ -20,12 +20,25 @@ export default function LoginPage() {
   const [modo, setModo] = useState<"login" | "registro">("login")
   const [verPass, setVerPass] = useState(false)
 
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function clientAction(formData: FormData) {
+    setLoading(true)
+    setError(null)
     const { login } = await import('@/app/actions/auth.actions')
     const res = await login(formData)
     if (res?.error) setError(res.error)
+    setLoading(false)
+  }
+
+  const isDevOrDemo = process.env.NODE_ENV !== "production"
+
+  function fillDemo(userEmail: string) {
+    setEmail(userEmail)
+    setPassword("DemoCustodia2026!")
   }
 
   return (
@@ -100,6 +113,8 @@ export default function LoginPage() {
                   id="email"
                   name="email"
                   type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   placeholder="tu@empresa.com"
                   className="h-11 rounded-xl"
                   required
@@ -112,6 +127,8 @@ export default function LoginPage() {
                     id="password"
                     name="password"
                     type={verPass ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     className="h-11 rounded-xl pr-11"
                     required
@@ -135,48 +152,56 @@ export default function LoginPage() {
                 </div>
               )}
 
-              <Button type="submit" className="h-11 w-full rounded-xl text-sm font-semibold">
-                {modo === "login" ? "Iniciar sesión" : "Crear cuenta"}
+              <Button type="submit" disabled={loading} className="h-11 w-full rounded-xl text-sm font-semibold">
+                {loading ? "Iniciando..." : modo === "login" ? "Iniciar sesión" : "Crear cuenta"}
               </Button>
             </FieldGroup>
           </form>
 
-          <div className="my-6 flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-xs text-muted-foreground font-semibold uppercase">Acceso Rápido a Demo</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
+          {isDevOrDemo && (
+            <>
+              <div className="my-6 flex items-center gap-3">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-xs text-muted-foreground font-semibold uppercase">Relleno Rápido Demo</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10 text-xs font-medium border-primary/30 hover:bg-primary/5"
-              onClick={async () => {
-                const fd = new FormData();
-                fd.append("email", "casero@demo.custodia.app");
-                fd.append("password", "demo");
-                const { login } = await import("@/app/actions/auth.actions");
-                await login(fd);
-              }}
-            >
-              🏡 Casero Directo
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10 text-xs font-medium border-blue-500/30 hover:bg-blue-500/5"
-              onClick={async () => {
-                const fd = new FormData();
-                fd.append("email", "pm@demo.custodia.app");
-                fd.append("password", "demo");
-                const { login } = await import("@/app/actions/auth.actions");
-                await login(fd);
-              }}
-            >
-              🏢 Property Manager
-            </Button>
-          </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-10 text-xs font-medium border-primary/30 hover:bg-primary/5"
+                  onClick={() => fillDemo("casero@demo.custodia.app")}
+                >
+                  🏡 Casero Directo
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-10 text-xs font-medium border-blue-500/30 hover:bg-blue-500/5"
+                  onClick={() => fillDemo("pm@demo.custodia.app")}
+                >
+                  🏢 Property Manager
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-10 text-xs font-medium border-green-500/30 hover:bg-green-500/5"
+                  onClick={() => fillDemo("propietario@demo.custodia.app")}
+                >
+                  👤 Propietario
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-10 text-xs font-medium border-amber-500/30 hover:bg-amber-500/5"
+                  onClick={() => fillDemo("inquilino@demo.custodia.app")}
+                >
+                  🔑 Inquilino
+                </Button>
+              </div>
+            </>
+          )}
 
           <p className="mt-8 text-center text-sm text-muted-foreground">
             {modo === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}
