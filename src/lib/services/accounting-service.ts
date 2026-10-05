@@ -299,12 +299,14 @@ export const accountingService = {
     const directOwnerBalance = calcBalance(accounts.cashDirectOwner, 'ASSET');
     const securityDepositsHeld = calcBalance(accounts.securityDepositsLiability, 'LIABILITY');
 
-    // 4. Compromisos operativos vigentes (Órdenes aprobadas o en curso no completadas: estimado menos lo ya pagado)
+    // 4. Compromisos operativos vigentes
+    // Solo comprometen saldo en custodia las órdenes que ya están autorizadas/en curso (IN_PROGRESS)
+    // Las órdenes AWAITING_APPROVAL no fondeadas son propuestas que aún no han consumido saldo real
     const committedOrders = await db.workOrder.findMany({
       where: {
         propertyId,
         tenantId,
-        status: { in: ['AWAITING_APPROVAL', 'IN_PROGRESS'] }
+        status: 'IN_PROGRESS'
       },
       select: { id: true, estimatedCost: true, actualCost: true }
     });
