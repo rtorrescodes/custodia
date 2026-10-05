@@ -1,64 +1,56 @@
-# ADR-003: Arquitectura de Integración de Pagos con Stripe Connect (CUS-03)
+# ADR-003: Análisis Arquitectónico y Fiscal de Integración con Stripe Connect (CUS-03)
 
 ## Estado
-Propuesto / Preparado para Fase CUS-03 (Sin cobros reales)
+Borrador de Trabajo / En Revisión Especializada (Sin activación externa)
 
-## Contexto y Dos Necesidades Distintas de Cobro
-Custodia presenta dos flujos monetarios completamente desacoplados:
-1. **Flujo A (Suscripción SaaS Custodia):** Cobro recurrente de la plataforma Custodia hacia las organizaciones (Caseros y Property Managers) por puerta o suscripción mensual/anual.
-2. **Flujo B (Cobranza de Rentas de Inquilinos):** Cobro de rentas, mantenimientos y depósitos desde los inquilinos hacia los Property Managers o caseros.
-
-## Comparativa Técnica: Stripe Connect Standard vs. Custom / Express en México y LATAM
-
-| Criterio | Stripe Connect Standard | Stripe Connect Custom / Express |
-| :--- | :--- | :--- |
-| **Responsabilidad KYC y Legal** | Stripe asume el KYC y contratos con cada PM. El PM crea su cuenta de Stripe directamente. | Custodia asume la responsabilidad del KYC o el flujo de onboarding; mayor riesgo regulatorio para la plataforma. |
-| **Riesgo de Contracargos y Saldo Negativo** | El PM o casero absorbe el riesgo directo en su cuenta conectada. Custodia no queda expuesta a deudas de terceros. | Custodia responde solidariamente ante Stripe por balances negativos o fraudes en cuentas Custom. |
-| **Experiencia de Usuario (White-Label)** | Redirige al Dashboard de Stripe para configuración bancaria y fiscal inicial. | Embebido en la UI de Custodia, pero requiere desarrollo complejo de compliance y reportes ante el SAT. |
-| **Comisiones de Plataforma (Application Fees)** | Custodia puede cobrar una tarifa por transacción (`application_fee_amount`) de forma transparente y automática. | Custodia gestiona las transferencias directas (`transfers`) deduciendo honorarios. |
-
-### Decisión de Recomendación Arquitectónica:
-Para la operación de Property Managers en México, **Stripe Connect Standard con cargos directos o cargos de destino (`Destination Charges`)** es la alternativa óptima:
-- Deslinda a Custodia de la retención fiscal obligatoria de plataformas tecnológicas en rentas ajenas y de la absorción de saldos negativos por disputas entre inquilinos y propietarios.
-- Permite a cada Property Manager deducir sus comisiones y dispersar transferencias hacia sus cuentas bancarias locales vía SPEI con su propia razón social.
+## 1. Contexto Operativo y Dos Modelos de Cobro
+Custodia administra dos circuitos financieros estrictamente separados:
+- **Flujo A (Suscripción SaaS Custodia):** Cobro de Custodia a las empresas/caseros por el uso del software (tarifa por puerta/mes).
+- **Flujo B (Cobranza de Rentas de Inquilinos):** Cobro de rentas, mantenimientos y depósitos de inquilinos en favor de Property Managers (PMs) o propietarios.
 
 ---
 
-## Contrato de Proveedor de Pagos y Mocks (CUS-03)
+## 2. Comparativa Técnica y de Responsabilidad: Direct Charges vs. Destination Charges vs. Separate Charges & Transfers
 
-```typescript
-export interface PaymentIntentRequest {
-  tenantId: string;
-  leaseId: string;
-  chargeId: string;
-  amount: number;
-  currency: string;
-  customerEmail: string;
-  metadata?: Record<string, string>;
-}
+Conforme a la documentación oficial de Stripe ([Stripe Connect Disputes](https://docs.stripe.com/connect/disputes), [Direct Charges](https://docs.stripe.com/connect/direct-charges), y [Destination Charges](https://docs.stripe.com/connect/destination-charges)):
 
-export interface PaymentIntentResponse {
-  paymentIntentId: string;
-  clientSecret: string;
-  status: 'requires_payment_method' | 'processing' | 'succeeded' | 'failed';
-}
+| Dimensión de Análisis | Direct Charges (Cargos Directos) | Destination Charges (Cargos de Destino) | Separate Charges and Transfers |
+| :--- | :--- | :--- | :--- |
+| **Cuenta donde se crea el cargo** | Cuenta Conectada (del PM/Dueño). | Cuenta de la Plataforma (Custodia). | Cuenta de la Plataforma (Custodia). |
+| **Titular de los Fondos** | La Cuenta Conectada es el comerciante registrado (Merchant of Record). | La Plataforma cobra y transfiere inmediatamente a la conectada. | La Plataforma cobra en su balance y luego transfiere discrecionalmente. |
+| **Responsabilidad de Contracargos y Disputas** | **La Cuenta Conectada** responde íntegramente por contracargos, tarifas de disputa y pérdidas. | **La Plataforma (Custodia)** es responsable principal ante Stripe; los fondos en disputa se descuentan del balance de Custodia si la conectada carece de saldo. | **La Plataforma (Custodia)** responde al 100% por disputas y fraude. |
+| **Saldos Negativos** | Permanecen en la Cuenta Conectada. Stripe intenta recuperarlos de la cuenta bancaria del PM. | Custodia absorbe el saldo negativo ante Stripe si el PM no tiene fondos suficientes. | Custodia absorbe cualquier saldo negativo. |
+| **Comisión de la Plataforma** | Custodia cobra mediante `application_fee_amount` deducido automáticamente en el cargo. | Custodia cobra reteniendo una porción del cargo antes del split. | Custodia retiene fondos en su balance antes de la transferencia. |
+| **Tipo de Cuenta Conectada Recomendada** | Standard (el PM tiene su propio dashboard) o Express. | Express o Custom. | Express o Custom. |
+| **Presencia en el Estado de Cuenta del Inquilino** | Nombre del Property Manager / Inmobiliaria. | Nombre de Custodia o Nombre Conjunto. | Nombre de Custodia. |
 
-export interface WebhookEventPayload {
-  id: string;
-  type: string;
-  data: {
-    object: {
-      id: string;
-      amount: number;
-      currency: string;
-      status: string;
-      metadata?: Record<string, string>;
-    };
-  };
-}
-```
+---
 
-### Invariantes de Frontera:
-1. **Checkout Exitoso $\neq$ Dinero en Banco:** Un evento `checkout.session.completed` únicamente confirma la intención de pago; la contabilidad de fondos líquidos solo se asienta cuando el webhook confirma `charge.succeeded` o `payout.paid`.
-2. **Idempotencia de Webhooks:** El `event.id` de Stripe debe persistirse en una tabla de eventos procesados para ignorar reintentos duplicados del webhook.
-3. **Cero Claves Reales en Local:** Todo test local de CUS-03 debe consumir un adaptador Mock que simule caídas, firmas inválidas y duplicados sin invocar los servidores de Stripe en vivo.
+## 3. Corrección Crítica de Conclusiones Previas
+
+> [!WARNING]
+> **Correcciones Obligatorias:**
+> 1. Se retira formalmente la afirmación previa de que *"Destination Charges mitiga contracargos en cuentas conectadas"*. Por diseño de Stripe Connect, en **Destination Charges la plataforma (Custodia) es responsable final ante Stripe por disputas, tarifas y balances negativos**, no la cuenta conectada.
+> 2. Se retira formalmente la afirmación de que *"Standard con Destination Charges deslinda a Custodia de retenciones fiscales"*. La elección entre Standard/Custom/Express o el tipo de cargo **no exime legal ni tributariamente a la plataforma** frente a las regulaciones del SAT en México (como la retención a plataformas tecnológicas o la emisión de complementos de pago).
+
+---
+
+## 4. Candidato Arquitectónico Recomendado para Evaluación: Direct Charges con Cuentas Standard
+
+Para el flujo de rentas entre inquilino y PM:
+1. **Merchant of Record Claro:** El Property Manager o dueño es el receptor formal del pago. Su razón social aparece en el recibo y extracto bancario del inquilino.
+2. **Mitigación Real de Responsabilidad de Disputas:** Con **Direct Charges**, las disputas y contracargos son gestionados directamente por la cuenta conectada del PM; Stripe deduce las pérdidas de la cuenta bancaria del PM, no del patrimonio de Custodia.
+3. **Flujo de Monetización SaaS:** Custodia cobra su comisión de plataforma (`application_fee_amount`) de forma nativa en cada transacción exitosa.
+
+---
+
+## 5. Cuestiones Fiscales y Legales: Marcadas como PENDIENTES DE VALIDACIÓN ESPECIALIZADA
+
+1. **Régimen de Plataformas Tecnológicas (Art. 113-A LISR):** Se requiere dictamen fiscal de un contador/abogado fiscalista para determinar si el cobro de rentas de terceros mediante Direct Charges constituye intermediación gravada con retención obligatoria de ISR/IVA para Custodia en México.
+2. **Facturación Electrónica (CFDI con Complemento de Arrendamiento):** Definir si el CFDI al inquilino lo timbra el PM directamente desde su propio RFC o si se requiere un servicio de timbrado PAC embebido.
+
+---
+
+## 6. Frontera Técnica y Mocks (CUS-03)
+- No se activarán claves reales de Stripe (`pk_live`, `sk_live`) ni se habilitarán webhooks de producción hasta contar con el dictamen fiscal y la aprobación explícita de Dirección.
+- Se mantiene el adaptador [`MockPaymentProvider`](file:///c:/CODES/Custodia/src/lib/payments/mock-payment-provider.ts) para simular los estados `requires_action`, `succeeded`, caídas de red y deduplicación durable de webhooks.
