@@ -1,8 +1,117 @@
-// Simple i18n implementation for MVP
-export type Locale = 'es' | 'en'
+// Diccionario bilingüe global para Custodia (ES / EN)
+export type Locale = 'es' | 'en';
 
 export const dictionaries = {
   es: {
+    nav: {
+      home: "Inicio",
+      properties: "Propiedades",
+      maintenance: "Mantenimiento",
+      finances: "Finanzas",
+      integrations: "Integraciones",
+      settings: "Configuración",
+      logout: "Cerrar sesión",
+      ownerPortal: "Portal del Dueño",
+      tenantPortal: "Portal de Inquilino",
+      vendorPortal: "Portal de Proveedor",
+      langSelect: "Idioma",
+    },
+    propertyDetail: {
+      title: "Detalle de Propiedad",
+      breadcrumb: "Propiedades / Detalle",
+      address: "Dirección",
+      amenities: "Amenidades",
+      coowners: "Copropietarios",
+      integrations: "Integraciones activas",
+      alddeaPasses: "Pases de Acceso (Alddea)",
+      generateQr: "Generar Pase QR",
+      createWorkOrder: "Crear orden de trabajo",
+      reportExpense: "Reportar Gasto / Necesidad",
+      recordStay: "Programar Llegada / Estadía",
+      
+      tabs: {
+        operations: "Centro de Mando",
+        expenses: "Gastos & Aprobaciones",
+        stays: "Llegadas & Estancias",
+        vault: "Bóveda Digital",
+        chat: "Chat PM-Dueño (IA)",
+        maintenance: "Historial Mantenimiento",
+        ledger: "Ledger Financiero",
+        agreement: "Acuerdo & Fondo Reserva",
+      },
+      
+      expensesTab: {
+        title: "Control de Gastos y Reparaciones",
+        subtitle: "Gestión transparente de cotizaciones, umbral de autorización y comprobantes.",
+        reportedNeeds: "Gastos y Órdenes Activas",
+        newExpense: "Nuevo Reporte de Gasto",
+        approvalThreshold: "Umbral de Aprobación Automática:",
+        requiresApproval: "Requiere Aprobación del Dueño (> fondo de reserva)",
+        autoApproved: "Cubierto por Fondo de Reserva",
+        concept: "Concepto / Descripción",
+        cost: "Costo Estimado",
+        status: "Estado",
+        quote: "Cotización",
+        approveAction: "Aprobar Gasto",
+        approved: "Aprobado",
+        rejected: "Rechazado",
+        pending: "Pendiente de Autorización",
+        invoiceAttached: "Factura / Ticket Adjunto",
+      },
+
+      staysTab: {
+        title: "Llegadas, Visitas y Estadías",
+        subtitle: "Coordina la llegada del propietario o invitados para tener el inmueble impecable.",
+        scheduleStay: "Registrar Nueva Llegada",
+        upcomingStays: "Próximas Llegadas Programadas",
+        visitorType: "Tipo de Huésped",
+        ownerStay: "Estadía del Dueño (Owner Stay)",
+        guestVisit: "Visita de Familiares / Huéspedes",
+        dates: "Fechas de Estadía",
+        peopleCount: "Personas",
+        specialRequests: "Requerimientos Especiales",
+        prepChecklist: "Checklist de Preparación",
+        cleaningDone: "Limpieza profunda completada",
+        acChecked: "Aires acondicionados y servicios verificados",
+        suppliesReady: "Insumos y sábanas listas",
+        qrEmitted: "Pase de caseta QR emitido",
+      },
+
+      vaultTab: {
+        title: "Bóveda Digital de la Propiedad",
+        subtitle: "Códigos de cerradura inteligente, claves de alarma y red Wi-Fi (Cero acceso a agentes no autorizados).",
+        addKey: "Agregar Nueva Clave",
+        keyName: "Nombre del Acceso",
+        type: "Tipo",
+        value: "Código / Clave",
+        instructions: "Instrucciones",
+        reveal: "Mostrar",
+        hide: "Ocultar",
+        smartLock: "Cerradura Inteligente",
+        wifi: "Red Wi-Fi",
+        alarm: "Alarma Perimetral",
+        lockbox: "Caja de Llaves",
+      },
+
+      chatTab: {
+        title: "Canal Directo PM ↔ Propietario",
+        subtitle: "Comunicación fluida con traducción automática en tiempo real.",
+        placeholder: "Escribe un mensaje al propietario en tu idioma...",
+        send: "Enviar",
+        autoTranslated: "Traducido por IA",
+        viewOriginal: "Ver texto original",
+        translating: "Traduciendo...",
+      },
+
+      agreementTab: {
+        title: "Acuerdo de Administración y Fiduciario",
+        managementType: "Modalidad de Gestión",
+        fundCustodian: "Custodia de Fondos",
+        commission: "Comisión del PM",
+        reserveFund: "Fondo de Reserva Mínimo",
+        reserveDesc: "Monto retenido para solventar reparaciones urgentes sin pausar la operación.",
+      }
+    },
     portal: {
       title: "Portal del Dueño",
       statement: "Estado de cuenta",
@@ -23,10 +132,121 @@ export const dictionaries = {
       pending: "Pendiente",
       back: "Volver",
       noProperties: "No tienes propiedades asignadas.",
-      selectProperty: "Selecciona una propiedad"
+      selectProperty: "Selecciona una propiedad",
+      chatWithPm: "Chat con tu Administrador",
+      scheduleMyStay: "Avisar que voy a mi propiedad",
     }
   },
   en: {
+    nav: {
+      home: "Home",
+      properties: "Properties",
+      maintenance: "Maintenance",
+      finances: "Finances",
+      integrations: "Integrations",
+      settings: "Settings",
+      logout: "Log out",
+      ownerPortal: "Owner Portal",
+      tenantPortal: "Tenant Portal",
+      vendorPortal: "Vendor Portal",
+      langSelect: "Language",
+    },
+    propertyDetail: {
+      title: "Property Details",
+      breadcrumb: "Properties / Details",
+      address: "Address",
+      amenities: "Amenities",
+      coowners: "Co-owners",
+      integrations: "Active Integrations",
+      alddeaPasses: "Access Passes (Alddea)",
+      generateQr: "Generate QR Pass",
+      createWorkOrder: "Create Work Order",
+      reportExpense: "Report Expense / Need",
+      recordStay: "Schedule Stay / Arrival",
+
+      tabs: {
+        operations: "Command Center",
+        expenses: "Expenses & Approvals",
+        stays: "Arrivals & Stays",
+        vault: "Digital Vault",
+        chat: "PM-Owner Chat (AI)",
+        maintenance: "Maintenance History",
+        ledger: "Financial Ledger",
+        agreement: "Agreement & Reserve Fund",
+      },
+
+      expensesTab: {
+        title: "Expense & Repair Management",
+        subtitle: "Transparent quote management, approval thresholds and receipts.",
+        reportedNeeds: "Active Expenses & Orders",
+        newExpense: "New Expense Report",
+        approvalThreshold: "Automatic Approval Threshold:",
+        requiresApproval: "Owner Approval Required (> reserve fund)",
+        autoApproved: "Covered by Reserve Fund",
+        concept: "Concept / Description",
+        cost: "Estimated Cost",
+        status: "Status",
+        quote: "Quote",
+        approveAction: "Approve Expense",
+        approved: "Approved",
+        rejected: "Rejected",
+        pending: "Pending Approval",
+        invoiceAttached: "Invoice / Receipt Attached",
+      },
+
+      staysTab: {
+        title: "Arrivals, Visits & Stays",
+        subtitle: "Coordinate owner or guest arrivals so the property is pristine and ready.",
+        scheduleStay: "Schedule New Arrival",
+        upcomingStays: "Upcoming Scheduled Stays",
+        visitorType: "Guest Type",
+        ownerStay: "Owner Stay",
+        guestVisit: "Family / Guest Visit",
+        dates: "Stay Dates",
+        peopleCount: "People",
+        specialRequests: "Special Requests / Concierge",
+        prepChecklist: "Preparation Checklist",
+        cleaningDone: "Deep cleaning completed",
+        acChecked: "HVAC and utilities tested",
+        suppliesReady: "Linens & toiletries stocked",
+        qrEmitted: "Gate QR pass issued",
+      },
+
+      vaultTab: {
+        title: "Property Digital Vault",
+        subtitle: "Smart lock codes, alarm pins, and Wi-Fi credentials (Zero access for unauthorized agents).",
+        addKey: "Add New Credential",
+        keyName: "Access Point Name",
+        type: "Type",
+        value: "Code / Key",
+        instructions: "Instructions",
+        reveal: "Show",
+        hide: "Hide",
+        smartLock: "Smart Lock",
+        wifi: "Wi-Fi Network",
+        alarm: "Perimeter Alarm",
+        lockbox: "Lockbox",
+      },
+
+      chatTab: {
+        title: "Direct PM ↔ Owner Channel",
+        subtitle: "Seamless communication with real-time automatic AI translation.",
+        placeholder: "Write a message to the owner in your language...",
+        send: "Send",
+        autoTranslated: "AI Translated",
+        viewOriginal: "View original text",
+        translating: "Translating...",
+      },
+
+      agreementTab: {
+        title: "Management & Escrow Agreement",
+        managementType: "Management Type",
+        fundCustodian: "Fund Custodian",
+        commission: "PM Commission",
+        reserveFund: "Minimum Reserve Fund",
+        reserveDesc: "Retained balance to handle urgent repairs without halting property operations.",
+      }
+    },
     portal: {
       title: "Owner Portal",
       statement: "Account Statement",
@@ -47,12 +267,13 @@ export const dictionaries = {
       pending: "Pending",
       back: "Go Back",
       noProperties: "You have no assigned properties.",
-      selectProperty: "Select a property"
+      selectProperty: "Select a property",
+      chatWithPm: "Chat with your Manager",
+      scheduleMyStay: "Notify Owner Arrival",
     }
   }
-}
+};
 
-// Helper to get dict (in a real app, locale comes from cookies/params)
-export function getDictionary(locale: Locale) {
-  return dictionaries[locale]
+export function getDictionary(locale: Locale = 'es') {
+  return dictionaries[locale] || dictionaries.es;
 }

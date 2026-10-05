@@ -134,6 +134,11 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         tenant: { include: { integrations: true } },
         portfolio: true,
         parent: true,
+        vaults: true,
+        agreements: true,
+        leases: {
+          include: { renter: true }
+        },
       },
     });
 
@@ -158,6 +163,9 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
 
     const workOrders = await tx.workOrder.findMany({
       where: { propertyId },
+      include: {
+        quotes: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -165,6 +173,38 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       where: { propertyId },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Cargar hilos de comunicación de esta propiedad (o crear hilo por defecto si no existe)
+    let commThread = await tx.communicationThread.findFirst({
+      where: { propertyId, audience: "PM_OWNER" },
+      include: {
+        messages: {
+          orderBy: { createdAt: 'asc' }
+        }
+      }
+    });
+
+    if (!commThread) {
+      commThread = await tx.communicationThread.create({
+        data: {
+          tenantId,
+          propertyId,
+          audience: "PM_OWNER",
+          title: `Canal de Comunicación - ${property.name}`,
+        },
+        include: {
+          messages: true
+        }
+      });
+    }
+
+    // Cargar inspecciones / estancias programadas
+    const inspections = await tx.inspection.findMany({
+      where: { propertyId },
+      orderBy: { inspectionDate: 'desc' }
+    });
+
+    const activeAgreement = property.agreements[0] || null;
 
     return {
       id: property.id,
@@ -178,7 +218,7 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       cartera: property.portfolio?.name || "Sin cartera asignada",
       esUnidadHija: property.isUnit,
       inmueblePadre: property.parent?.name || null,
-      amenidades: ["Estacionamiento", "Seguridad 24/7"],
+      amenidades: ["Estacionamiento", "Seguridad 24/7", "Alberca", "Wi-Fi de Alta Velocidad"],
       fotos: [
         "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=800&auto=format&fit=crop&q=60",
       ],
@@ -186,6 +226,74 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         id: o.userId,
         nombre: o.user.email,
         participacion: Number(o.ownershipShare),
+      })),
+      acuerdo: activeAgreement ? {
+        id: activeAgreement.id,
+        tipoComision: activeAgreement.commissionType,
+        tasaComision: Number(activeAgreement.commissionRate),
+        reservaMinima: Number(activeAgreement.reserveMinimum),
+      } : {
+        id: null,
+        tipoComision: "PERCENTAGE_RENT",
+        tasaComision: 0.10,
+        reservaMinima: 2000,
+      },
+      boveda: property.vaults.map(v => ({
+        id: v.id,
+        keyName: v.keyName,
+        type: v.type,
+        keyValue: v.keyValue,
+        instructions: v.instructions || "",
+      })),
+      ordenesConCotizacion: workOrders.map(w => ({
+        id: w.id,
+        titulo: w.title,
+        descripcion: w.description,
+        estado: w.status,
+        prioridad: w.priority,
+        costoEstimado: Number(w.estimatedCost || 0),
+        costoReal: Number(w.actualCost || 0),
+        cotizaciones: w.quotes.map(q => ({
+          id: q.id,
+          costoTotal: Number(q.totalCost),
+          costoManoObra: Number(q.laborCost),
+          costoMateriales: Number(q.materialCost),
+          estado: q.status,
+          partidas: q.itemsJson,
+          aprobadoPor: q.approvedById,
+          aprobadoEn: q.approvedAt?.toISOString() || null,
+        })),
+        requiereAprobacionOwner: Number(w.estimatedCost || 0) > (Number(activeAgreement?.reserveMinimum) || 2000),
+      })),
+      estadias: inspections.map(i => ({
+        id: i.id,
+        tipo: i.type,
+        estado: i.status,
+        responsable: i.inspectorName,
+        fecha: i.inspectionDate.toISOString(),
+        notas: i.summaryNotes || "",
+        checklist: i.checklistJson || {},
+      })),
+      chat: {
+        threadId: commThread.id,
+        mensajes: commThread.messages.map(m => ({
+          id: m.id,
+          remitente: m.senderName,
+          rol: m.senderRole,
+          contenido: m.content,
+          fecha: m.createdAt.toISOString(),
+          esMio: m.senderId === membership.userId,
+        }))
+      },
+      contratos: property.leases.map(l => ({
+        id: l.id,
+        inquilino: l.renter.email,
+        montoRenta: Number(l.rentAmount),
+        moneda: l.currency,
+        diaPago: l.paymentDay,
+        inicio: l.startDate.toISOString(),
+        fin: l.endDate.toISOString(),
+        estado: l.status,
       })),
       integraciones: [
         ...property.tenant.integrations.map(i => ({

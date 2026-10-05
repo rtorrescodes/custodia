@@ -183,6 +183,31 @@ export function AppShell({
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  document.cookie = "custodia_lang=es; path=/; max-age=31536000"
+                  window.location.reload()
+                }}
+                className="rounded-md px-2 py-1 text-foreground transition-all hover:bg-background/80"
+                title="Español"
+              >
+                🇲🇽 ES
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  document.cookie = "custodia_lang=en; path=/; max-age=31536000"
+                  window.location.reload()
+                }}
+                className="rounded-md px-2 py-1 text-muted-foreground transition-all hover:text-foreground hover:bg-background/80"
+                title="English"
+              >
+                🇺🇸 EN
+              </button>
+            </div>
+
             <Button variant="ghost" size="icon" className="relative rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors" aria-label="Notificaciones">
               <Bell className="size-4.5" />
               {alertas > 0 && (
