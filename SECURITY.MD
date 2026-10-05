@@ -41,8 +41,15 @@ cambia en el flujo de login/logout.
 
 Revisa la lógica que recibe webhooks de mi proveedor de pagos
 (Stripe, PayPal, etc.). Verifica que se esté validando la
-firma/secreto del webhook en cada petición antes de procesar el
-evento, y que ninguna acción de pago (activar acceso, marcar como
+firma/secreto del webhook en cada*   **Sensibilidad de Datos Futuros (Scope Expansion):** Los módulos de renta a largo plazo, edificios y comercial introducen datos de extrema sensibilidad (expedientes de inquilinos, historial de pago/crédito, contratos comerciales confidenciales, garantías, fianzas). Estos deben tratarse con el mismo nivel de cifrado en reposo, control de acceso y auditoría inmutable que los datos financieros de la Fase 1.
+*   **Tokenización de Pagos (PCI-DSS):** CUSTODIA NUNCA almacena ni toca los datos crudos (PAN) de tarjetas bancarias. Todos los pagos recurrentes se manejan mediante bóvedas de tokens (Vaulting) del lado de Stripe o Mercado Pago.
+*   **Datos Financieros de Terceros (Fintech/Seguros):** Las integraciones de seguros y factoring (Fases 9 y 10) introducen cuentas bancarias de proveedores y aseguradoras. Su nivel de protección debe ceñirse al estándar militar; nunca usar un estándar relajado.
+*   **Superficie de Agentes Autónomos No Confiable (Fase 13):** La ejecución de skills por asistentes conversacionales (OpenClaw/Rocío) debe regirse por 5 principios:
+    1. Allowlist explícito de skills por rol y tenant.
+    2. Revalidación obligatoria de autorización (RBAC/RLS) dentro del Server Action, sin confiar en el LLM.
+    3. Scoping estricto de datos (Cero posibilidad de lectura cross-tenant por prompt injection).
+    4. Bitácora inmutable de cada invocación (payload, data tocada, respuesta).
+    5. Revisión de seguridad estilo "supply chain" para toda skill de terceros. La elección de qué proveedor de LLM procesa datos específicos es una decisión de soberanía de negocio, no técnica por default.
 pagado, etc.) dependa únicamente de datos enviados desde el
 frontend. Corrige lo que falte.
 

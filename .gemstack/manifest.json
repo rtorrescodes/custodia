@@ -1,0 +1,142 @@
+{
+  "version": "2.0.3",
+  "files": [
+    {
+      "path": ".agents/rules/01-gemstack-core.md",
+      "checksum": "c6e03b6d4c9bf9f234a44367007f615c7e3ffb70d67a0c2264e47e629113e938"
+    },
+    {
+      "path": ".agents/rules/02-gemstack-constitution.md",
+      "checksum": "1c6a882c33731bf0628b1fb4256e870d0cede1290d7b59e40b583d270f9dbc3e"
+    },
+    {
+      "path": ".agents/rules/03-gemstack-security.md",
+      "checksum": "6f694bebb5d028f44175e2a24105823951e51b17cce9c9b274500bd23f9502f5"
+    },
+    {
+      "path": ".agents/rules/04-gemstack-infrastructure.md",
+      "checksum": "e2b39a3d3937d0a4e5c635d9b641a2cb35e98397e7a934b303610a506d70738c"
+    },
+    {
+      "path": ".agents/skills/gemstack-cso/SKILL.md",
+      "checksum": "e4b5aea1d787b1731512c7dfea2ebf90742e05bbe374c392d56ed75cf09086d7"
+    },
+    {
+      "path": ".agents/skills/gemstack-dashboard/SKILL.md",
+      "checksum": "0c25fa22f9f3a3fd7e9b064ed79a6be5c8ddc55d07d37b5b117c70c6c9759bf9"
+    },
+    {
+      "path": ".agents/skills/gemstack-guard/SKILL.md",
+      "checksum": "411720c4becd9ea0ac97627c03b8a6c74e8e4dc11e9576bd259379c601dcaf91"
+    },
+    {
+      "path": ".agents/skills/gemstack-handoff/SKILL.md",
+      "checksum": "2cf6df63634fb0cf8ea57bf55fb0cfa11ac5dc2e651b86ed115819665e2a9b85"
+    },
+    {
+      "path": ".agents/skills/gemstack-heal/SKILL.md",
+      "checksum": "a2ee163b7a03d9b0d298735014a2c3419d6500f049ba6663a00dbee6a58fbb0b"
+    },
+    {
+      "path": ".agents/skills/gemstack-investigate/SKILL.md",
+      "checksum": "7141988093a1534495539529512a87bf0140063bb8aca7810d69aa1a209b32bb"
+    },
+    {
+      "path": ".agents/skills/gemstack-learn/SKILL.md",
+      "checksum": "092f602fa688262f27a32b42071803c1af59f40d1de9ce2ac1c718e2a91e9b29"
+    },
+    {
+      "path": ".agents/skills/gemstack-office-hours/SKILL.md",
+      "checksum": "9b199ce48eaa14dab92f45e83a982879486a2de61b1e260c56c85ad3b759d25f"
+    },
+    {
+      "path": ".agents/skills/gemstack-plan/SKILL.md",
+      "checksum": "24884dc719a655e2575dbc3caa719e2e8ae6edfada94cb86cf6a931016d8d219"
+    },
+    {
+      "path": ".agents/skills/gemstack-qa/SKILL.md",
+      "checksum": "847656e51c6829620a028ebdc774b6fad0feeff90144472bbc4e37930df16e09"
+    },
+    {
+      "path": ".agents/skills/gemstack-qa-visual/SKILL.md",
+      "checksum": "df0ed4f6ff1150c4481070db889aa9de23cfb1adceaf6b7b6666accd8a13d631"
+    },
+    {
+      "path": ".agents/skills/gemstack-resume/SKILL.md",
+      "checksum": "b058e83fa985c6cc7dd0775dd0dfd0adf49ce8b95680313d93dc8a57ed49c48c"
+    },
+    {
+      "path": ".agents/skills/gemstack-review/SKILL.md",
+      "checksum": "0c9ea3e02c1d9712cb8e77a546d694d28759995d3d1f4cf1c37ba1fe5aa28a1f"
+    },
+    {
+      "path": ".agents/skills/gemstack-sandbox/SKILL.md",
+      "checksum": "f48ec24493595546273302eb66e08b96d7851b2c8369ccf9c2247216477972b3"
+    },
+    {
+      "path": ".agents/skills/gemstack-ship/SKILL.md",
+      "checksum": "4d48697f1a1eb719f96584a6376fd4e6796e2acb3b38b7b5e785eccd0cd17769"
+    },
+    {
+      "path": ".agents/skills/gemstack-spec/SKILL.md",
+      "checksum": "4dde89f450193662ffc5ef91861a81424ecb3f10e86de3aa7b2c8ef78aff186c"
+    },
+    {
+      "path": ".agents/skills/gemstack-swarm/SKILL.md",
+      "checksum": "5f44902d5bc3be1a52a83c995b8228171160f2a3e1464720b5bb877277422e9f"
+    },
+    {
+      "path": ".agents/skills/gemstack-tasks/SKILL.md",
+      "checksum": "1930796f609ee1f99e97ad95fcaefa01375bb7a23d27707740424d764699aa2f"
+    },
+    {
+      "path": "docs/antigravity.md",
+      "checksum": "34091ca64ac9bf986fe35c980f09ee587132a8cff66450773f6bbe04499ce3ff"
+    },
+    {
+      "path": "docs/architecture-consistency.md",
+      "checksum": "6717f2e19fdc3fafb9e63bb13736343c5517e5c5b50b47cbe430eab043ce6272"
+    },
+    {
+      "path": "docs/handoff.md",
+      "checksum": "e8e1ce1968dc5d1e2393c1a0760dd721ee545c05ecfd06621800674c373436b6"
+    },
+    {
+      "path": "docs/qa-browser.md",
+      "checksum": "95d020485e9666859959024021a377637cdb8ad4f15cba1e50868a8b39dee993"
+    },
+    {
+      "path": "docs/quickstart.md",
+      "checksum": "b5d4ef02d46f2456e93c07507a0b0ba6a96191fb219dca3c2ee5998512430cb7"
+    },
+    {
+      "path": "docs/release.md",
+      "checksum": "c424d60f93a891223987dc77263fc629ffe01a2f11445d0abdd738998dd97fe9"
+    },
+    {
+      "path": "docs/security.md",
+      "checksum": "807ae2ee4eea0771cde7d0d1ba86fea0be58a02cd395516810f165a28dfb920f"
+    },
+    {
+      "path": "docs/skills.md",
+      "checksum": "d3b52f8af00f48d9e5ae14ad51f4b265a5a03dd19a6ace74bb22ca8ec791ee6b"
+    },
+    {
+      "path": "docs/spec-driven-development.md",
+      "checksum": "373412ace14499d5670b3f5b91c338e16995edaf4328a56d0b130b2e5b08ceda"
+    },
+    {
+      "path": "specs/templates/plan.md",
+      "checksum": "765f1667199e0d8c98dcb5ba93a476da420d528b2356e85c582f073414d38dad"
+    },
+    {
+      "path": "specs/templates/spec.md",
+      "checksum": "777c262cd601fd5d2441d59a3f4d06f959a6d7f55b75470b47e742e9ebb61de1"
+    },
+    {
+      "path": "specs/templates/tasks.md",
+      "checksum": "53e0b7340780a071e55362c2485ddda23074f9ecbcc23453fc470086c905c574"
+    }
+  ],
+  "installedAt": "2026-10-05T03:51:36.463Z"
+}

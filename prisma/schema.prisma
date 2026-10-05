@@ -1,0 +1,438 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------
+// Core & Multi-Tenant Setup
+// ---------------------------------------------------------
+model Tenant {
+  id          String @id @default(uuid())
+  name        String
+  countryCode String // For localization
+  currency    String // e.g., MXN, USD
+  timezone    String
+
+  // Platform SaaS Billing
+  stripeCustomerId   String?
+  subscriptionPlan   String  @default("FREE")
+  subscriptionStatus String  @default("ACTIVE") // ACTIVE, PAST_DUE, CANCELED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  operatingMode OperatingMode @default(LANDLORD)
+
+  users        User[]
+  members      TenantMember[]
+  portfolios   Portfolio[]
+  invitations  TenantInvitation[]
+  properties   Property[]
+  workOrders   WorkOrder[]
+  transactions Transaction[]
+  integrations TenantIntegration[]
+  addons       TenantAddon[]
+  leases       Lease[]
+  vendors      TenantVendor[]
+}
+
+model User {
+  id            String          @id @default(uuid())
+  tenantId      String
+  email         String
+  passwordHash  String
+  role          UserRole // SUPER_ADMIN, ADMIN, MANAGER, STAFF, VENDOR, OWNER
+  mfaEnabled    Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  properties    PropertyOwner[]
+  assignedTasks WorkOrder[]     @relation("AssignedStaff")
+  leases        Lease[]         @relation("LeasedProperties")
+
+  // Multi-organization memberships & invitations (CUS-01)
+  memberships        TenantMember[]
+  createdInvitations TenantInvitation[] @relation("CreatedInvitations")
+
+  @@unique([tenantId, email])
+}
+
+enum OperatingMode {
+  LANDLORD
+  PROPERTY_MANAGER
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  STAFF
+  VENDOR
+  OWNER
+  RENTER
+}
+
+enum MemberRole {
+  PM_ADMIN
+  PM_STAFF
+  LANDLORD
+  OWNER
+  RENTER
+  VENDOR
+}
+
+enum MemberStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  REVOKED
+}
+
+model TenantMember {
+  id        String       @id @default(uuid())
+  tenantId  String
+  userId    String
+  role      MemberRole   @default(PM_ADMIN)
+  status    MemberStatus @default(ACTIVE)
+  joinedAt  DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  portfolioAccesses MemberPortfolioAccess[]
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, status])
+  @@index([userId])
+}
+
+model Portfolio {
+  id          String   @id @default(uuid())
+  tenantId    String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant     Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  properties Property[]
+  members    MemberPortfolioAccess[]
+
+  @@index([tenantId])
+}
+
+model MemberPortfolioAccess {
+  id          String @id @default(uuid())
+  memberId    String
+  portfolioId String
+
+  member    TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  portfolio Portfolio    @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, portfolioId])
+}
+
+model TenantInvitation {
+  id          String       @id @default(uuid())
+  tenantId    String
+  email       String
+  role        MemberRole
+  tokenHash   String       @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdById String
+  createdAt   DateTime     @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User   @relation("CreatedInvitations", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, email])
+  @@index([tokenHash])
+}
+
+enum ManagementType {
+  OWNED
+  THIRD_PARTY
+  PENDING_REVIEW
+}
+
+enum FundCustodian {
+  LANDLORD
+  PM_ESCROW
+  DIRECT_OWNER
+  UNDETERMINED
+}
+
+// ---------------------------------------------------------
+// Properties & Ownership
+// ---------------------------------------------------------
+model Property {
+  id              String   @id @default(uuid())
+  tenantId        String
+  name            String
+  address         String
+  fraccionamiento String? // Optional relation to Alddea
+  alddeaId        String? // External ID for Alddea integration
+  ravsisId        String? // External ID for RAVSIS integration
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // CUS-01 hierarchy, ownership & lifecycle
+  portfolioId    String?
+  parentId       String?
+  isUnit         Boolean        @default(false)
+  unitNumber     String?
+  managementType ManagementType @default(PENDING_REVIEW)
+  fundCustodian  FundCustodian  @default(UNDETERMINED)
+  archivedAt     DateTime?
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  portfolio    Portfolio?      @relation(fields: [portfolioId], references: [id], onDelete: SetNull)
+  parent       Property?       @relation("PropertyUnits", fields: [parentId], references: [id], onDelete: SetNull)
+  units        Property[]      @relation("PropertyUnits")
+  owners       PropertyOwner[]
+  workOrders   WorkOrder[]
+  transactions Transaction[]
+  leases       Lease[]
+  vaults       PropertyVault[]
+}
+
+model PropertyOwner {
+  propertyId     String
+  userId         String
+  ownershipShare Decimal @default(100.00) // Support for co-ownership
+
+  property Property @relation(fields: [propertyId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@id([propertyId, userId])
+}
+
+// ---------------------------------------------------------
+// Work Orders & Maintenance
+// ---------------------------------------------------------
+model WorkOrder {
+  id            String   @id @default(uuid())
+  tenantId      String
+  propertyId    String
+  assignedToId  String?
+  title         String
+  description   String
+  status        WOStatus @default(PENDING)
+  estimatedCost Decimal?
+  actualCost    Decimal?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant     Tenant         @relation(fields: [tenantId], references: [id])
+  property   Property       @relation(fields: [propertyId], references: [id])
+  assignedTo User?          @relation("AssignedStaff", fields: [assignedToId], references: [id])
+  evidences  FileEvidence[]
+}
+
+enum WOStatus {
+  PENDING
+  IN_PROGRESS
+  AWAITING_APPROVAL
+  COMPLETED
+  CANCELLED
+}
+
+// ---------------------------------------------------------
+// Finances & Ledger (Trust Accounting)
+// ---------------------------------------------------------
+model Transaction {
+  id               String   @id @default(uuid())
+  tenantId         String
+  propertyId       String
+  amount           Decimal
+  currency         String
+  type             TxType // INCOME, EXPENSE
+  category         String
+  description      String
+  receiptUrl       String?
+  requiresApproval Boolean  @default(false)
+  isApproved       Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  property Property @relation(fields: [propertyId], references: [id])
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+// ---------------------------------------------------------
+// Integrations & Webhooks
+// ---------------------------------------------------------
+model TenantIntegration {
+  id        String   @id @default(uuid())
+  tenantId  String
+  provider  String // ALDDEA, RAVSIS, STRIPE_CONNECT, MERCADOPAGO
+  isActive  Boolean  @default(false)
+  config    Json // Non-sensitive config (e.g. connected account ID)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, provider])
+}
+
+model TenantAddon {
+  tenantId  String
+  addon     PlatformAddon
+  isActive  Boolean       @default(true)
+  expiresAt DateTime?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@id([tenantId, addon])
+}
+
+enum PlatformAddon {
+  MANTENIMIENTO
+  PORTAL_INQUILINOS
+  CONSERJE_IA
+  PORTAL_DUEÑOS
+}
+
+// ---------------------------------------------------------
+// Property Vault (Bóveda)
+// ---------------------------------------------------------
+model PropertyVault {
+  id           String    @id @default(uuid())
+  propertyId   String
+  type         VaultType
+  keyName      String // e.g. "Main Door", "WiFi Network"
+  keyValue     String // Encrypted at application level
+  instructions String? // Optional context
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id])
+}
+
+enum VaultType {
+  WIFI
+  SMART_LOCK
+  ALARM
+  LOCKBOX
+  OTHER
+}
+
+// ---------------------------------------------------------
+// B2B Vendors (Proveedores)
+// ---------------------------------------------------------
+model VendorCategory {
+  id      String   @id @default(uuid())
+  name    String   @unique
+  vendors Vendor[]
+}
+
+model Vendor {
+  id          String  @id @default(uuid())
+  name        String
+  contactName String?
+  email       String?
+  phone       String?
+  categoryId  String?
+
+  // Alddea features
+  isPublic   Boolean @default(false)
+  isVerified Boolean @default(false)
+  rating     Float   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  category VendorCategory? @relation(fields: [categoryId], references: [id])
+  tenants  TenantVendor[]
+}
+
+model TenantVendor {
+  tenantId   String
+  vendorId   String
+  isFavorite Boolean @default(false)
+  notes      String? // Private notes by the PM
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@id([tenantId, vendorId])
+}
+
+model FileEvidence {
+  id          String   @id @default(uuid())
+  workOrderId String
+  fileUrl     String // Google Cloud Storage URL
+  fileType    String
+  createdAt   DateTime @default(now())
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+}
+
+// ---------------------------------------------------------
+// Leases & Renters (Phase 2)
+// ---------------------------------------------------------
+model Lease {
+  id         String @id @default(uuid())
+  tenantId   String
+  propertyId String
+  renterId   String
+
+  startDate     DateTime
+  endDate       DateTime
+  rentAmount    Decimal
+  currency      String   @default("MXN")
+  depositAmount Decimal?
+  paymentDay    Int // Day of the month rent is due (e.g. 1)
+
+  status LeaseStatus @default(DRAFT) // DRAFT -> PENDING_SIGNATURE -> ACTIVE -> ENDED
+
+  // Payment Provider bindings
+  stripeSubId      String?
+  mercadoPagoSubId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id])
+  property  Property        @relation(fields: [propertyId], references: [id])
+  renter    User            @relation("LeasedProperties", fields: [renterId], references: [id])
+  evidences LeaseEvidence[]
+}
+
+enum LeaseStatus {
+  DRAFT
+  PENDING_SIGNATURE
+  ACTIVE
+  ENDED
+}
+
+model LeaseEvidence {
+  id        String      @id @default(uuid())
+  leaseId   String
+  fileUrl   String // Google Cloud Storage URL
+  type      LeaseEvType // MOVE_IN, MOVE_OUT, CONTRACT_PDF
+  notes     String?
+  createdAt DateTime    @default(now())
+
+  lease Lease @relation(fields: [leaseId], references: [id])
+}
+
+enum LeaseEvType {
+  MOVE_IN
+  MOVE_OUT
+  CONTRACT_PDF
+}

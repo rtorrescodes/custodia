@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gemstack": {
+      "command": "npx",
+      "args": ["gemstack-ai", "mcp"]
+    }
+  }
+}
