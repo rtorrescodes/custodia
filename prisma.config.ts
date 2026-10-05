@@ -8,6 +8,6 @@ export default defineConfig({
     seed: 'npx tsx ./prisma/seed.ts',
   },
   datasource: {
-    url: env('DIRECT_URL'), // Using DIRECT_URL for migrations
+    url: env('DATABASE_URL'), // Using port 6543 pooler for operations
   },
 })

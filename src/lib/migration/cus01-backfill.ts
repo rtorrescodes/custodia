@@ -82,15 +82,15 @@ export async function runCus01Backfill(): Promise<BackfillReport> {
         }
       }
 
-      // 1.3 Asignar cartera por defecto y tipo a propiedades que carezcan de ella
+      // 1.3 Asignar cartera por defecto a propiedades que carezcan de ella
       for (const prop of tenant.properties) {
-        if (!prop.portfolioId || !prop.managementType) {
+        if (!prop.portfolioId) {
           await prisma.property.update({
             where: { id: prop.id },
             data: {
-              portfolioId: prop.portfolioId || defaultPortfolio.id,
-              managementType: prop.managementType || "OWNED",
-              fundCustodian: prop.fundCustodian || "LANDLORD"
+              portfolioId: defaultPortfolio.id,
+              managementType: prop.managementType || "PENDING_REVIEW",
+              fundCustodian: prop.fundCustodian || "UNDETERMINED"
             }
           });
           report.propertiesUpdated++;

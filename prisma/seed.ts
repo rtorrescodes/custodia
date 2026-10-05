@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { createClient } from '@supabase/supabase-js';
 import { Pool } from 'pg';
