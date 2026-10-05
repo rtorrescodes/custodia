@@ -38,6 +38,12 @@ model Tenant {
   addons       TenantAddon[]
   leases       Lease[]
   vendors      TenantVendor[]
+  accounts     LedgerAccount[]
+  journalEntries JournalEntry[]
+  charges      Charge[]
+  payments     Payment[]
+  agreements   ManagementAgreement[]
+  settlementProposals SettlementProposal[]
 }
 
 model User {
@@ -57,6 +63,8 @@ model User {
   // Multi-organization memberships & invitations (CUS-01)
   memberships        TenantMember[]
   createdInvitations TenantInvitation[] @relation("CreatedInvitations")
+  journalLines       JournalLine[]      @relation("OwnerJournalLines")
+  settlementProposals SettlementProposal[] @relation("OwnerSettlements")
 
   @@unique([tenantId, email])
 }
@@ -201,6 +209,10 @@ model Property {
   transactions Transaction[]
   leases       Lease[]
   vaults       PropertyVault[]
+  charges      Charge[]
+  agreements   ManagementAgreement[]
+  journalLines JournalLine[]
+  settlementProposals SettlementProposal[]
 }
 
 model PropertyOwner {
@@ -411,6 +423,9 @@ model Lease {
   property  Property        @relation(fields: [propertyId], references: [id])
   renter    User            @relation("LeasedProperties", fields: [renterId], references: [id])
   evidences LeaseEvidence[]
+  charges   Charge[]
+  payments  Payment[]
+  journalLines JournalLine[]
 }
 
 enum LeaseStatus {
@@ -436,3 +451,242 @@ enum LeaseEvType {
   MOVE_OUT
   CONTRACT_PDF
 }
+
+// ---------------------------------------------------------
+// CUS-02 Financial Engine & Trust Accounting Models
+// ---------------------------------------------------------
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model LedgerAccount {
+  id          String      @id @default(uuid())
+  tenantId    String
+  code        String      // e.g. 1000_CASH_PM_ESCROW, 1010_CASH_DIRECT_OWNER, 2000_DEPOSITS
+  name        String
+  type        AccountType
+  currency    String      @default("MXN")
+  createdAt   DateTime    @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  journalLines JournalLine[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, type])
+}
+
+enum EntryStatus {
+  POSTED
+  REVERSED
+}
+
+model JournalEntry {
+  id             String       @id @default(uuid())
+  tenantId       String
+  idempotencyKey String
+  effectiveDate  DateTime
+  description    String
+  status         EntryStatus  @default(POSTED)
+  reversedById   String?      @unique
+  createdById    String?
+  createdAt      DateTime     @default(now())
+
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines     JournalLine[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, effectiveDate])
+}
+
+model JournalLine {
+  id         String   @id @default(uuid())
+  entryId    String
+  accountId  String
+  debit      Decimal  @default(0)
+  credit     Decimal  @default(0)
+  currency   String   @default("MXN")
+  propertyId String?
+  leaseId    String?
+  ownerId    String?
+  createdAt  DateTime @default(now())
+
+  entry    JournalEntry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account  LedgerAccount @relation(fields: [accountId], references: [id])
+  property Property?     @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  lease    Lease?        @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  owner    User?         @relation("OwnerJournalLines", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([entryId])
+  @@index([accountId])
+  @@index([propertyId])
+  @@index([ownerId])
+}
+
+enum ChargeType {
+  RENT
+  MAINTENANCE_FEE
+  LATE_FEE
+  SECURITY_DEPOSIT
+  UTILITY
+  OTHER
+}
+
+enum ChargeStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+model Charge {
+  id          String       @id @default(uuid())
+  tenantId    String
+  leaseId     String
+  propertyId  String
+  concept     String
+  type        ChargeType   @default(RENT)
+  amount      Decimal
+  currency    String       @default("MXN")
+  dueDate     DateTime
+  periodMonth Int
+  periodYear  Int
+  status      ChargeStatus @default(PENDING)
+  amountPaid  Decimal      @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lease        Lease                @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  property     Property             @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  applications PaymentApplication[]
+
+  @@unique([leaseId, periodYear, periodMonth, type])
+  @@index([tenantId, status])
+  @@index([propertyId])
+}
+
+enum PaymentStatus {
+  REPORTED
+  CONFIRMED
+  CLEARED
+  REVERSED
+}
+
+enum PaymentMethod {
+  TRANSFER
+  CASH
+  CARD
+  STRIPE
+  OTHER
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  tenantId      String
+  leaseId       String?
+  payerName     String
+  amount        Decimal
+  currency      String        @default("MXN")
+  status        PaymentStatus @default(REPORTED)
+  method        PaymentMethod @default(TRANSFER)
+  reference     String?
+  receiptUrl    String?
+  confirmedAt   DateTime?
+  confirmedById String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lease        Lease?               @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  applications PaymentApplication[]
+
+  @@index([tenantId, status])
+  @@index([leaseId])
+}
+
+model PaymentApplication {
+  id            String   @id @default(uuid())
+  paymentId     String
+  chargeId      String
+  amountApplied Decimal
+  appliedAt     DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  charge  Charge  @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([chargeId])
+}
+
+enum CommissionType {
+  PERCENTAGE_RENT
+  FIXED_FEE
+  HYBRID
+}
+
+enum CommissionBase {
+  COLLECTED
+  ACCRUED
+}
+
+model ManagementAgreement {
+  id             String         @id @default(uuid())
+  tenantId       String
+  propertyId     String?
+  portfolioId    String?
+  commissionType CommissionType @default(PERCENTAGE_RENT)
+  commissionRate Decimal        @default(0.10) // 10%
+  fixedFeeAmount Decimal?
+  commissionBase CommissionBase @default(COLLECTED)
+  reserveMinimum Decimal        @default(0)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property? @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId])
+}
+
+enum SettlementStatus {
+  DRAFT
+  APPROVED
+  EXECUTED
+  CANCELLED
+}
+
+model SettlementProposal {
+  id                 String           @id @default(uuid())
+  tenantId           String
+  ownerId            String
+  propertyId         String?
+  periodStart        DateTime
+  periodEnd          DateTime
+  grossCollected     Decimal
+  expensesDeducted   Decimal
+  commissionDeducted Decimal
+  reserveRetained    Decimal
+  netPayable         Decimal
+  currency           String           @default("MXN")
+  status             SettlementStatus @default(DRAFT)
+  approvedById       String?
+  executedAt         DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  owner    User      @relation("OwnerSettlements", fields: [ownerId], references: [id], onDelete: Cascade)
+  property Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([ownerId])
+}
+
