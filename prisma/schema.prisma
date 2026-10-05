@@ -53,6 +53,8 @@ model Tenant {
   workOrderQuotes WorkOrderQuote[]
   alddeaPassDelegations AlddeaPassDelegation[]
   communicationThreads CommunicationThread[]
+  monthlyClosings       MonthlyClosing[]
+  internalNotifications InternalNotification[]
 }
 
 model User {
@@ -1062,6 +1064,59 @@ model CommunicationMessage {
 
   @@index([threadId, createdAt])
 }
+
+// =========================================================
+// CUS-07 & CUS-08: Cierre Mensual, Notificaciones y Planes
+// =========================================================
+
+enum ClosingStatus {
+  OPEN
+  IN_REVIEW
+  CLOSED
+  REOPENED
+}
+
+model MonthlyClosing {
+  id             String        @id @default(uuid())
+  tenantId       String
+  periodYear     Int
+  periodMonth    Int
+  currency       String        @default("MXN")
+  status         ClosingStatus @default(OPEN)
+  closedById     String?
+  closedAt       DateTime?
+  reopenedById   String?
+  reopenedAt     DateTime?
+  reopenReason   String?
+  summarySnapshot Json         // Balance: cobrado, gastos reconocidos, comisiones, reservas, distribuible
+  discrepanciesCount Int       @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, periodYear, periodMonth, currency])
+  @@index([tenantId, status])
+}
+
+model InternalNotification {
+  id         String   @id @default(uuid())
+  tenantId   String
+  userId     String?  // Opcional si es broadcast de organización
+  eventType  String   // PAYMENT_RECEIVED, QUOTE_PENDING, LEASE_EXPIRING, TICKET_EMERGENCY
+  title      String
+  message    String
+  linkUrl    String?
+  isRead     Boolean  @default(false)
+  dedupeKey  String?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, isRead])
+  @@index([tenantId, dedupeKey])
+}
+
 
 
 
