@@ -345,6 +345,12 @@ export async function getLeases(requestedTenantId?: string) {
       include: {
         property: true,
         renter: true,
+        charges: {
+          orderBy: { dueDate: 'desc' }
+        },
+        payments: {
+          orderBy: { createdAt: 'desc' }
+        }
       },
       orderBy: { createdAt: 'desc' }
     });

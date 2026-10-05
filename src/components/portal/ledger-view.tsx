@@ -50,19 +50,27 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
     },
   ]
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-      {cards.map((c) => (
-        <Card key={c.label} className="gap-0 p-5">
-          <div className={cn("flex size-10 items-center justify-center rounded-xl", c.tone)}>
-            <c.icon className="size-5" />
-          </div>
-          <p className="mt-4 text-sm text-muted-foreground">{c.label}</p>
-          <p className="mt-1 text-2xl font-bold tracking-tight text-foreground">
-            {formatMoney(c.value.amount, c.value.currency)}
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">{c.value.currency}</p>
-        </Card>
-      ))}
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {cards.map((c) => (
+          <Card key={c.label} className="gap-0 p-5">
+            <div className={cn("flex size-10 items-center justify-center rounded-xl", c.tone)}>
+              <c.icon className="size-5" />
+            </div>
+            <p className="mt-4 text-sm text-muted-foreground">{c.label}</p>
+            <p className="mt-1 text-2xl font-bold tracking-tight text-foreground">
+              {formatMoney(c.value.amount, c.value.currency)}
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{c.value.currency}</p>
+          </Card>
+        ))}
+      </div>
+      <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 p-4 text-xs text-neutral-600 dark:text-neutral-400 flex flex-col sm:flex-row justify-between gap-2 items-start sm:items-center">
+        <div>
+          <span className="font-semibold text-neutral-900 dark:text-neutral-100">Transparencia Fiduciaria (ADR-002):</span>
+          <p className="mt-0.5">El disponible para liquidación deduce comisiones contractuales, gastos autorizados y reservas mínimas operativas. Los depósitos en garantía se mantienen en custodia separada y no aumentan el saldo distribuible.</p>
+        </div>
+      </div>
     </div>
   )
 }

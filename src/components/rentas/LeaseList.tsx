@@ -50,13 +50,39 @@ export function LeaseList({ initialLeases, properties }: Props) {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h1 className="text-3xl font-bold text-neutral-900 dark:text-white">Rentas e Inquilinos</h1>
-        <Button 
-          onClick={() => setIsModalOpen(true)}
-          className="bg-[#5955D1] hover:bg-[#4b47b4] text-white"
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          Nuevo Contrato
-        </Button>
+        <div className="flex gap-2">
+          <Button 
+            variant="outline"
+            onClick={async () => {
+              const month = new Date().getMonth() + 1;
+              const year = new Date().getFullYear();
+              if (!confirm(`¿Generar cargos de renta para el periodo ${month}/${year}?`)) return;
+              try {
+                const { generateMonthlyRentChargesAction } = await import("@/app/actions/financial.actions");
+                const res = await generateMonthlyRentChargesAction({ month, year });
+                if (res?.data) {
+                  alert(`¡${res.data.count} cargos de renta generados exitosamente!`);
+                  window.location.reload();
+                } else if (res?.error) {
+                  alert(res.error);
+                }
+              } catch (e: any) {
+                alert("Error generando rentas: " + e.message);
+              }
+            }}
+            className="border-neutral-300 dark:border-neutral-700"
+          >
+            <Clock className="mr-2 h-4 w-4 text-neutral-600" />
+            Generar Rentas del Mes
+          </Button>
+          <Button 
+            onClick={() => setIsModalOpen(true)}
+            className="bg-[#5955D1] hover:bg-[#4b47b4] text-white"
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Nuevo Contrato
+          </Button>
+        </div>
       </div>
 
       <Card className="bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800">
