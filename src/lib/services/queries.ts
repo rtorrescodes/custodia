@@ -462,3 +462,60 @@ export async function getRenterPortalData(requestedTenantId?: string) {
   });
 }
 
+export async function getTenantSettings(requestedTenantId?: string) {
+  const { tenantId, membership } = await getSessionAndTenant(requestedTenantId);
+
+  return withTenantRLS(tenantId, async (tx) => {
+    const tenant = await tx.tenant.findUnique({
+      where: { id: tenantId },
+      include: {
+        members: {
+          include: { user: true }
+        },
+        addons: true,
+      }
+    });
+
+    if (!tenant) throw new Error("Organización no encontrada");
+
+    return {
+      id: tenant.id,
+      name: tenant.name,
+      countryCode: tenant.countryCode,
+      currency: tenant.currency,
+      timezone: tenant.timezone,
+      operatingMode: tenant.operatingMode,
+      subscriptionPlan: tenant.subscriptionPlan,
+      subscriptionStatus: tenant.subscriptionStatus,
+      addons: tenant.addons,
+      members: tenant.members.map(m => ({
+        id: m.id,
+        email: m.user.email,
+        role: m.role,
+        status: m.status,
+        joinedAt: m.joinedAt.toISOString(),
+      })),
+      userRole: membership.role,
+    };
+  });
+}
+
+export async function getTenantIntegrations(requestedTenantId?: string) {
+  const { tenantId } = await getSessionAndTenant(requestedTenantId);
+
+  return withTenantRLS(tenantId, async (tx) => {
+    const integrations = await tx.tenantIntegration.findMany({
+      where: { tenantId }
+    });
+
+    return integrations.map(i => ({
+      id: i.id,
+      provider: i.provider,
+      isActive: i.isActive,
+      config: i.config,
+      updatedAt: i.updatedAt.toISOString(),
+    }));
+  });
+}
+
+
