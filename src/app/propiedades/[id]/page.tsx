@@ -94,9 +94,14 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
           </div>
 
           <div className="flex flex-col gap-1">
-            <span className="text-[11px] font-medium text-muted-foreground">Disponible Fiduciario</span>
+            <span className="text-[11px] font-medium text-muted-foreground">Disponible Operativo</span>
             <span className="text-xs font-bold text-foreground">
               ${(property.fondosFiduciarios?.disponibleNuevasObligaciones || 0).toLocaleString()} MXN
+            </span>
+            <span className="text-[10px] text-muted-foreground truncate">
+              {property.fondosFiduciarios?.reservaFaltante > 0
+                ? `Faltante reserva: $${property.fondosFiduciarios.reservaFaltante.toLocaleString()} MXN`
+                : `Reserva completa: $${(property.fondosFiduciarios?.reservaConstituida || 0).toLocaleString()} MXN`}
             </span>
           </div>
 

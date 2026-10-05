@@ -73,20 +73,26 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
         <Card className="border-border bg-card">
           <CardHeader className="pb-3 border-b">
             <CardTitle className="text-sm font-semibold flex items-center justify-between">
-              <span>Desglose Fiduciario y Disponibilidad (CUS-09B)</span>
+              <span>Desglose de Fondos y Disponibilidad Operativa</span>
               <span className={cn(
                 "px-2 py-0.5 rounded-full text-xs font-mono font-medium",
                 fid.esDeficitario
                   ? "bg-rose-500/10 text-rose-600 border border-rose-500/30"
+                  : fid.reservaFaltante > 0
+                  ? "bg-amber-500/10 text-amber-600 border border-amber-500/30"
                   : "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30"
               )}>
-                {fid.esDeficitario ? "Cuenta en Déficit Operativo" : "Liquidez Suficiente"}
+                {fid.esDeficitario
+                  ? "Cuenta con Déficit Real"
+                  : fid.reservaFaltante > 0
+                  ? "Reserva Parcial / Faltante"
+                  : "Fondo de Reserva Completo"}
               </span>
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
             <div>
-              <p className="text-muted-foreground">Efectivo en Custodia PM:</p>
+              <p className="text-muted-foreground">Fondos Recibidos en Custodia:</p>
               <p className="font-mono font-bold text-sm text-foreground mt-0.5">
                 ${fid.custodiaPmEfectiva.toLocaleString()} MXN
               </p>
@@ -98,27 +104,32 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground">Reserva Mínima Contractual:</p>
-              <p className="font-mono font-medium text-sm text-muted-foreground mt-0.5">
-                −${fid.reservaMinima.toLocaleString()} MXN
+              <p className="text-muted-foreground">Reserva Constituida / Meta:</p>
+              <p className="font-mono font-medium text-sm text-foreground mt-0.5">
+                ${fid.reservaConstituida.toLocaleString()} / ${fid.reservaMinima.toLocaleString()} MXN
               </p>
+              {fid.reservaFaltante > 0 && (
+                <p className="text-[10px] text-amber-600 mt-0.5">
+                  Faltante por aportar: ${fid.reservaFaltante.toLocaleString()} MXN
+                </p>
+              )}
             </div>
             <div>
-              <p className="text-muted-foreground">Compromisos Vigentes:</p>
+              <p className="text-muted-foreground">Compromisos Aprobados:</p>
               <p className="font-mono font-medium text-sm text-muted-foreground mt-0.5">
                 −${fid.compromisosVigentes.toLocaleString()} MXN
               </p>
             </div>
             <div className="col-span-2 md:col-span-4 pt-2 border-t border-border flex items-center justify-between">
               <div>
-                <span className="font-semibold text-foreground">Disponible Real para Nuevas Obligaciones:</span>
+                <span className="font-semibold text-foreground">Disponible para Nuevas Operaciones:</span>
                 <p className="text-[11px] text-muted-foreground">
-                  (Custodia PM − Depósitos en Garantía − Reserva Mínima − Compromisos Aprobados)
+                  (Efectivo neto bajo custodia − Reserva constituida − Compromisos aprobados)
                 </p>
               </div>
               <span className={cn(
                 "text-base font-bold font-mono",
-                fid.disponibleNuevasObligaciones < 0 ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
+                fid.esDeficitario ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
               )}>
                 ${fid.disponibleNuevasObligaciones.toLocaleString()} MXN
               </span>
@@ -129,8 +140,8 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
 
       <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 p-4 text-xs text-neutral-600 dark:text-neutral-400 flex flex-col sm:flex-row justify-between gap-2 items-start sm:items-center">
         <div>
-          <span className="font-semibold text-neutral-900 dark:text-neutral-100">Transparencia Fiduciaria (ADR-002):</span>
-          <p className="mt-0.5">El disponible para liquidación deduce comisiones contractuales, gastos autorizados y reservas mínimas operativas. Los depósitos en garantía se mantienen en custodia separada y no aumentan el saldo distribuible.</p>
+          <span className="font-semibold text-neutral-900 dark:text-neutral-100">Transparencia Financiera Fiduciaria:</span>
+          <p className="mt-0.5">El disponible para liquidación deduce comisiones contractuales, gastos autorizados y reservas constituidas. Los depósitos en garantía se mantienen en custodia separada y no aumentan el saldo distribuible.</p>
         </div>
       </div>
     </div>

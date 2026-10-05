@@ -30,11 +30,28 @@ import {
   createExpenseAction,
   approveQuoteAction,
   scheduleStayAction,
+  cancelStayAction,
+  completeCareInspectionAction,
   sendChatMessageAction,
   requestOwnerContributionAction,
   configurePmExpensePolicyAction,
   recordSupplyMovementAction,
+  recordVendorPaymentAction,
 } from "@/app/actions/property-operations.actions"
+import {
+  updateOperationalTaskStatusAction,
+  requestTaskVerificationAction,
+  resolveTaskVerificationAction,
+} from "@/app/actions/operational-task.actions"
+import {
+  renewLeaseAction,
+  processMoveOutWithDepositReviewAction,
+  executeRecurringObligationAction,
+} from "@/app/actions/lease.actions"
+import {
+  generateOwnerPerformanceReportAction,
+  executePropertyHandoffAction,
+} from "@/app/actions/property.actions"
 import {
   revealVaultSecretAction,
   addVaultEntry,
@@ -320,10 +337,14 @@ export function PropertyTabs({
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid grid-cols-2 md:grid-cols-6 h-auto p-1 bg-muted/60 rounded-xl gap-1">
+        <TabsList className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 h-auto p-1 bg-muted/60 rounded-xl gap-1">
           <TabsTrigger value="expenses" className="text-xs py-2">
             <DollarSign className="size-3.5 mr-1" />
             {dict.tabs.expenses}
+          </TabsTrigger>
+          <TabsTrigger value="governance" className="text-xs py-2">
+            <Layers className="size-3.5 mr-1" />
+            {dict.tabs.governance}
           </TabsTrigger>
           <TabsTrigger value="stays" className="text-xs py-2">
             <CalendarDays className="size-3.5 mr-1" />
@@ -331,7 +352,7 @@ export function PropertyTabs({
           </TabsTrigger>
           <TabsTrigger value="supplies" className="text-xs py-2">
             <Package className="size-3.5 mr-1" />
-            Suministros
+            {dict.tabs.supplies}
           </TabsTrigger>
           <TabsTrigger value="vault" className="text-xs py-2">
             <KeyRound className="size-3.5 mr-1" />
@@ -965,6 +986,104 @@ export function PropertyTabs({
                     </div>
                   ))
                 )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="governance" className="space-y-6 pt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Tareas Operativas & Verificación */}
+            <Card className="border-border">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Wrench className="h-4 w-4 text-primary" />
+                  Control de Tareas y Verificación
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Flujo de ejecución: asignación, avance justificado y revisión técnica PM
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  Permite al personal solicitar verificación con evidencia fotográfica y al PM resolver la aprobación técnica para habilitar liquidación.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20">
+                    Flujo: Pendiente → En Proceso → Verificación Solicitada → Aprobada
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Pagos a Proveedores y Compromisos */}
+            <Card className="border-border">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <DollarSign className="h-4 w-4 text-emerald-600" />
+                  Liquidación a Proveedores
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Pagos parciales y finiquitos vinculados a órdenes verificadas
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  Consume saldo disponible bajo custodia y amortiza el compromiso financiero de la orden sin duplicar asientos contables.
+                </p>
+                <div className="p-3 bg-muted/40 rounded-lg text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Custodia financiera:</span>
+                    <span className="font-semibold text-foreground">Separación estricta de fondos y depósitos</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Condición de pago:</span>
+                    <span className="font-semibold text-emerald-600">Verificación PM previa aprobada</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Ciclo de Vida: Renovación y Salida */}
+            <Card className="border-border">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <CalendarDays className="h-4 w-4 text-blue-600" />
+                  Arrendamiento: Renovación y Salida
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Versionado inmutable de contratos y liquidación fiduciaria de depósito en garantía
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  Al renovar se genera una nueva versión preservando el histórico. Al procesar salida (check-out), la liquidación del depósito requiere dictamen humano obligatorio.
+                </p>
+                <Badge variant="secondary" className="text-xs">
+                  Supervisión Requerida: Liquidación de Depósito
+                </Badge>
+              </CardContent>
+            </Card>
+
+            {/* Informe de Desempeño y Handoff */}
+            <Card className="border-border">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Receipt className="h-4 w-4 text-purple-600" />
+                  Gobernanza y Entrega de Cartera
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Generación de reportes bilingües y desvinculación formal de PM
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  El propietario puede consultar su informe en español o inglés. La entrega formal de administración transfiere tareas pendientes y revoca facultades del PM saliente.
+                </p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 p-2 rounded border border-border">
+                  <ShieldAlert className="h-4 w-4 shrink-0 text-primary" />
+                  <span>Control Perimetral: Emisión de credenciales y pases enlazados al control de acceso residencial.</span>
+                </div>
               </CardContent>
             </Card>
           </div>

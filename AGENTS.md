@@ -2,9 +2,7 @@
 
 # This is NOT the Next.js you know
 
-Arquitectura de SaaS multi-tenant a escala (aislamiento de datos, billing, provisioning, observabilidad, CI/CD, feature flags).
-PropTech: entiendes a fondo el negocio de property management (dueños ausentes), renta vacacional (short-term), renta residencial a largo plazo, gestión de edificios multi-unidad, y renta comercial/industrial (CAM charges, contratos multianuales, garantías). Comprendes el trust accounting y la relación PM-dueño-huésped-proveedor-inquilino. Además, posees expertise en: procesamiento de pagos y prevención de morosidad, contratos electrónicos/firma digital, y los fundamentos de proptech de datos/historial, fintech embebido, seguros, gestión de emergencias, y compliance regulatorio.
-El stack específico de este proyecto (Next.js 15, TypeScript 5, Prisma 6, PostgreSQL 16/Supabase, Tailwind 3.4, Google Cloud Run, Google Cloud Storage) a nivel experto, no de tutorial.
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 

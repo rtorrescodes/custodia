@@ -26,5 +26,8 @@ export const withTenantRLS = async <T>(tenantId: string, callback: (tx: Omit<Pri
     // Inject the current tenant context for PostgreSQL RLS policies
     await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
     return callback(tx);
+  }, {
+    timeout: 30000,
+    maxWait: 10000
   });
 };

@@ -50,23 +50,30 @@ export const accountingService = {
       { code: '5000_MAINTENANCE_EXPENSE', name: 'Gastos de Mantenimiento', type: 'EXPENSE' as const },
     ];
 
-    const accountsMap: Record<string, string> = {};
+    const defaultCodes = defaultAccounts.map(a => a.code);
+    const existing = await db.ledgerAccount.findMany({
+      where: { tenantId, code: { in: defaultCodes } }
+    });
 
+    const accountsMap: Record<string, string> = {};
+    for (const acc of existing) {
+      accountsMap[acc.code] = acc.id;
+    }
+
+    // Only create accounts that are missing
     for (const acc of defaultAccounts) {
-      const record = await db.ledgerAccount.upsert({
-        where: {
-          tenantId_code: { tenantId, code: acc.code }
-        },
-        update: {},
-        create: {
-          tenantId,
-          code: acc.code,
-          name: acc.name,
-          type: acc.type,
-          currency: 'MXN'
-        }
-      });
-      accountsMap[acc.code] = record.id;
+      if (!accountsMap[acc.code]) {
+        const record = await db.ledgerAccount.create({
+          data: {
+            tenantId,
+            code: acc.code,
+            name: acc.name,
+            type: acc.type,
+            currency: 'MXN'
+          }
+        });
+        accountsMap[acc.code] = record.id;
+      }
     }
 
     return {
@@ -263,12 +270,34 @@ export const accountingService = {
     const db = client || prisma;
     const accounts = await this.ensureStandardChartOfAccounts(tenantId, db);
 
-    // 1. Fondos en Caja PM Escrow para esta propiedad
-    const pmEscrowBalance = await this.getAccountBalance(tenantId, accounts.cashPmEscrow, { propertyId }, db);
-    // 2. Fondos informativos en cuenta directa del dueño
-    const directOwnerBalance = await this.getAccountBalance(tenantId, accounts.cashDirectOwner, { propertyId }, db);
-    // 3. Depósitos en garantía en custodia (Pasivo excluido)
-    const securityDepositsHeld = await this.getAccountBalance(tenantId, accounts.securityDepositsLiability, { propertyId }, db);
+    // 1, 2, 3: Consulta en lote de líneas de diario para las 3 cuentas operativas de la propiedad
+    const targetAccountIds = [accounts.cashPmEscrow, accounts.cashDirectOwner, accounts.securityDepositsLiability];
+    const journalLines = await db.journalLine.findMany({
+      where: {
+        accountId: { in: targetAccountIds },
+        propertyId,
+        entry: { tenantId, status: 'POSTED' }
+      },
+      include: { account: true }
+    });
+
+    const calcBalance = (accId: string, accType: string) => {
+      let b = new Prisma.Decimal(0);
+      for (const l of journalLines) {
+        if (l.accountId === accId) {
+          if (accType === 'ASSET' || accType === 'EXPENSE') {
+            b = b.plus(l.debit).minus(l.credit);
+          } else {
+            b = b.plus(l.credit).minus(l.debit);
+          }
+        }
+      }
+      return b;
+    };
+
+    const pmEscrowBalance = calcBalance(accounts.cashPmEscrow, 'ASSET');
+    const directOwnerBalance = calcBalance(accounts.cashDirectOwner, 'ASSET');
+    const securityDepositsHeld = calcBalance(accounts.securityDepositsLiability, 'LIABILITY');
 
     // 4. Compromisos operativos vigentes (Órdenes aprobadas o en curso no completadas: estimado menos lo ya pagado)
     const committedOrders = await db.workOrder.findMany({
@@ -311,10 +340,22 @@ export const accountingService = {
     // Saldo neto del propietario bajo custodia PM (restando pasivo de depósitos en garantía)
     const netOwnerEscrowFunds = Number(pmEscrowBalance) - Number(securityDepositsHeld);
 
-    // Disponible para nuevas obligaciones operativas: Saldo neto - Reserva - Compromisos - Liquidaciones activas
-    // NO se oculta el déficit con Math.max: Si es negativo, muestra el saldo deudor/déficit real
+    // Fondos disponibles antes de separar la reserva (no pueden ser negativos para constituir reserva)
+    const liquidFundsForReserve = Math.max(0, netOwnerEscrowFunds);
+    // Reserva efectivamente constituida con el efectivo real disponible
+    const reserveConstituida = Math.min(reserveMinimum, liquidFundsForReserve);
+    // Faltante para completar la reserva mínima requerida
+    const reserveFaltante = Math.max(0, reserveMinimum - reserveConstituida);
+
+    // Total de compromisos vigentes
     const totalCommitted = committedAmount + activeSettlementAmount;
-    const availableForExpenses = netOwnerEscrowFunds - reserveMinimum - totalCommitted;
+
+    // Disponible para nuevas obligaciones operativas:
+    // Efectivo neto real MENOS la reserva efectivamente constituida MENOS compromisos.
+    // Solo puede ser menor a 0 si los compromisos u obligaciones exceden el efectivo real disponible (déficit real).
+    const availableForExpenses = Math.max(0, netOwnerEscrowFunds - reserveConstituida - totalCommitted);
+    // Déficit real de fondos (deuda o compromisos en descubierto)
+    const realDeficit = (netOwnerEscrowFunds - totalCommitted) < 0 ? Math.abs(netOwnerEscrowFunds - totalCommitted) : 0;
 
     return {
       custodiaPmEfectiva: Number(pmEscrowBalance),
@@ -322,11 +363,14 @@ export const accountingService = {
       depositosGarantiaRetenidos: Number(securityDepositsHeld),
       fondosNetosDueño: netOwnerEscrowFunds,
       reservaMinimaContractual: reserveMinimum,
+      reservaConstituida: reserveConstituida,
+      reservaFaltante: reserveFaltante,
       compromisosVigentes: committedAmount,
       liquidacionesActivas: activeSettlementAmount,
       compromisosTotales: totalCommitted,
       disponibleNuevasObligaciones: availableForExpenses,
-      esDeficitario: availableForExpenses < 0,
+      deficitReal: realDeficit,
+      esDeficitario: realDeficit > 0,
       politicaGastoPM: {
         limiteAutorizado: pmExpenseLimit,
         estaConfigurado: pmExpenseLimit !== null,

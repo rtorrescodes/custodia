@@ -90,8 +90,11 @@ export interface FiduciarySummaryData {
   depositosGarantiaRetenidos: number
   fondosNetosDueño: number
   reservaMinima: number
+  reservaConstituida: number
+  reservaFaltante: number
   compromisosVigentes: number
   disponibleNuevasObligaciones: number
+  deficitReal: number
   esDeficitario: boolean
 }
 

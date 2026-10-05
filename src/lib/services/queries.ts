@@ -162,29 +162,50 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       }
     }
 
-    const workOrders = await tx.workOrder.findMany({
-      where: { propertyId },
-      include: {
-        quotes: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const transactions = await tx.transaction.findMany({
-      where: { propertyId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    // Cargar hilos de comunicación de esta propiedad (o crear hilo por defecto si no existe)
-    let commThread = await tx.communicationThread.findFirst({
-      where: { propertyId, audience: "PM_OWNER" },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' }
+    // Cargar en paralelo las colecciones operativas independientes de la propiedad
+    const [
+      workOrders,
+      transactions,
+      inspections,
+      operationalTasks,
+      ownerContributions,
+      supplies,
+      commThreadRaw,
+    ] = await Promise.all([
+      tx.workOrder.findMany({
+        where: { propertyId },
+        include: { quotes: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+      tx.transaction.findMany({
+        where: { propertyId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      tx.inspection.findMany({
+        where: { propertyId },
+        orderBy: { inspectionDate: 'desc' },
+      }),
+      tx.operationalTask.findMany({
+        where: { propertyId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      tx.ownerContribution.findMany({
+        where: { propertyId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      tx.supplyInventory.findMany({
+        where: { propertyId },
+        orderBy: { item: 'asc' },
+      }),
+      tx.communicationThread.findFirst({
+        where: { propertyId, audience: "PM_OWNER" },
+        include: {
+          messages: { orderBy: { createdAt: 'asc' } }
         }
-      }
-    });
+      }),
+    ]);
 
+    let commThread = commThreadRaw;
     if (!commThread) {
       commThread = await tx.communicationThread.create({
         data: {
@@ -198,30 +219,6 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         }
       });
     }
-
-    // Cargar inspecciones / estancias programadas
-    const inspections = await tx.inspection.findMany({
-      where: { propertyId },
-      orderBy: { inspectionDate: 'desc' }
-    });
-
-    // Cargar tareas operativas
-    const operationalTasks = await tx.operationalTask.findMany({
-      where: { propertyId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    // Cargar aportaciones del propietario
-    const ownerContributions = await tx.ownerContribution.findMany({
-      where: { propertyId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    // Cargar inventario de insumos
-    const supplies = await tx.supplyInventory.findMany({
-      where: { propertyId },
-      orderBy: { item: 'asc' },
-    });
 
     // CÁLCULO FIDUCIARIO REAL Y UNIFICADO CON EL MOTOR CONTABLE (CUS-09B)
     const fiduciarySummary = await accountingService.getPropertyFiduciarySummary(tenantId, propertyId, tx);
@@ -281,8 +278,11 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         depositosGarantiaRetenidos: fiduciarySummary.depositosGarantiaRetenidos,
         fondosNetosDueño: fiduciarySummary.fondosNetosDueño,
         reservaMinima: reserveMin,
+        reservaConstituida: fiduciarySummary.reservaConstituida,
+        reservaFaltante: fiduciarySummary.reservaFaltante,
         fondosComprometidos: fiduciarySummary.compromisosVigentes,
         disponibleNuevasObligaciones: availableFunds,
+        deficitReal: fiduciarySummary.deficitReal,
         esDeficitario: fiduciarySummary.esDeficitario,
         facultadPM: pmExpenseLimit,
         estaConfigurado: fiduciarySummary.politicaGastoPM.estaConfigurado,
@@ -710,8 +710,11 @@ export async function getOwnerLedger(propertyId?: string, requestedTenantId?: st
           depositosGarantiaRetenidos: fiduciary.depositosGarantiaRetenidos,
           fondosNetosDueño: fiduciary.fondosNetosDueño,
           reservaMinima: fiduciary.reservaMinimaContractual,
+          reservaConstituida: fiduciary.reservaConstituida,
+          reservaFaltante: fiduciary.reservaFaltante,
           compromisosVigentes: fiduciary.compromisosVigentes,
           disponibleNuevasObligaciones: fiduciary.disponibleNuevasObligaciones,
+          deficitReal: fiduciary.deficitReal,
           esDeficitario: fiduciary.esDeficitario,
         } : null,
       }

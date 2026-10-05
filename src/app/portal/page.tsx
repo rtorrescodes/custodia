@@ -2,6 +2,7 @@ import Link from "next/link"
 import { Building2, ChevronLeft, Globe } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { LedgerView } from "@/components/portal/ledger-view"
+import { OwnerPropertySelector } from "@/components/portal/owner-property-selector"
 import { getOwnerProperties, getOwnerLedger } from "@/lib/services/queries"
 import { getDictionary, Locale } from "@/lib/i18n"
 import { redirect } from "next/navigation"
@@ -83,18 +84,11 @@ export default async function PortalPage({
             </Link>
 
             {properties.length > 1 && (
-              <select 
-                className="text-sm bg-transparent border border-border rounded-md px-2 py-1"
-                // Client side navigation would be better here, using standard anchor for MVP SSR
-                onChange={(e) => {
-                  // Wait, select onChange needs client side JS. Since this is a server component,
-                  // I'll leave the select here as a demonstration but it requires a client wrapper to auto-navigate.
-                }}
-              >
-                {properties.map(p => (
-                  <option key={p.id} value={p.id} selected={p.id === selectedPropId}>{p.nombre}</option>
-                ))}
-              </select>
+              <OwnerPropertySelector
+                properties={properties}
+                selectedPropId={selectedProp.id}
+                currentLang={lang}
+              />
             )}
 
             <Avatar className="size-9">
