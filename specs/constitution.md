@@ -31,3 +31,15 @@ Este sistema maneja datos financieros, documentos legales y controla accesos fí
 
 ### 2.6. Retrocompatibilidad (Backward Compatibility)
 - Jamás asumir bases de datos vacías. Siempre asegurar que las alteraciones al esquema y la lógica mantengan accesibles y funcionales los datos existentes. (Referencia: `NEWSYS.MD`).
+
+### 2.7. Fideicomiso Operativo y Separación de Fondos (Trust Accounting Integrity)
+- Queda estrictamente prohibido equiparar reservas contractuales con autorización automática de gasto.
+- El saldo real del propietario, la reserva mínima, los fondos comprometidos y el disponible para nuevas obligaciones son magnitudes separadas e independientes.
+- Ninguna cotización se considera pagada o con fondos liberados hasta que la verificación técnica y la conciliación bancaria real ocurran.
+
+### 2.8. Protección de Bóveda y Auditoría de Revelado (Zero-Trust Secrets)
+- Las consultas habituales y vistas públicas/SSR del inmueble jamás deben transportar secretos descifrados ni exponerlos en el DOM, props de React o logs.
+- El acceso a secretos de bóveda requiere una Server Action explícita con validación de identidad y registro inmutable en auditoría sin registrar el valor del secreto.
+
+### 2.9. Honestidad en Asistencia e Inteligencia Artificial
+- Cuando un proveedor de IA o traducción no esté configurado o disponible, la plataforma debe declarar honestamente que la traducción no está disponible y mostrar el contenido original. Prohibido presentar textos heurísticos o diccionarios parciales simulando ser modelos de lenguaje.

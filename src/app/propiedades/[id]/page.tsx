@@ -54,6 +54,64 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
 
+        {/* CUS-09: Cabecera Operativa Real (B) */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 rounded-2xl border border-border/80 bg-card p-4 shadow-xs">
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Ocupación / Uso</span>
+            <span className="text-xs font-bold text-foreground inline-flex items-center gap-1.5">
+              <span className={`size-2 rounded-full ${
+                property.occupancyStatus === "RENTED" ? "bg-blue-500" :
+                property.occupancyStatus === "OWNER_OCCUPIED" ? "bg-emerald-500" : "bg-amber-500"
+              }`} />
+              {property.occupancyStatus === "RENTED" ? "Arrendada" :
+               property.occupancyStatus === "OWNER_OCCUPIED" ? "Uso Propietario" : "Desocupada / Custodia"}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Responsable PM</span>
+            <span className="text-xs font-bold text-foreground truncate">
+              {property.primaryManagerId ? "Asignado" : "Equipo General"}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Próxima Llegada</span>
+            <span className="text-xs font-bold text-foreground">
+              {property.estadias && property.estadias[0] ? new Date(property.estadias[0].fecha).toLocaleDateString() : "Sin programar"}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Decisiones Dueño</span>
+            <span className={`text-xs font-bold ${
+              property.ordenesConCotizacion?.filter((o: any) => o.requiereAprobacionOwner).length > 0
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-foreground"
+            }`}>
+              {property.ordenesConCotizacion?.filter((o: any) => o.requiereAprobacionOwner).length || 0} pendientes
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Disponible Fiduciario</span>
+            <span className="text-xs font-bold text-foreground">
+              ${(property.fondosFiduciarios?.disponibleNuevasObligaciones || 0).toLocaleString()} MXN
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Bloqueos Críticos</span>
+            <span className={`text-xs font-bold ${
+              property.tareasOperativas?.filter((t: any) => t.estado === "BLOCKED").length > 0
+                ? "text-rose-600 dark:text-rose-400"
+                : "text-emerald-600 dark:text-emerald-400"
+            }`}>
+              {property.tareasOperativas?.filter((t: any) => t.estado === "BLOCKED").length || 0} bloqueos
+            </span>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           {/* Left column */}
           <div className="flex flex-col gap-6 lg:col-span-2">

@@ -19,6 +19,7 @@ import {
   LogOut,
   UserRound,
   ShieldAlert,
+  Inbox,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -37,6 +38,7 @@ import {
 const nav = [
   { label: "Inicio", href: "/", icon: Home },
   { label: "Propiedades", href: "/propiedades", icon: Building2 },
+  { label: "Cartera", href: "/cartera", icon: Inbox },
   { label: "Mantenimiento", href: "/mantenimiento", icon: Wrench },
   { label: "Finanzas", href: "/portal", icon: Wallet },
   { label: "Integraciones", href: "/integraciones", icon: Cable },

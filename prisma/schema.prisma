@@ -211,6 +211,12 @@ model Property {
   fundCustodian  FundCustodian  @default(UNDETERMINED)
   archivedAt     DateTime?
 
+  // CUS-09: Control Operativo
+  occupancyStatus       OccupancyStatus @default(VACANT)
+  primaryManagerId      String?
+  careVisitIntervalDays Int             @default(15) // Frecuencia de visitas preventivas en días
+  lastCareVisitAt       DateTime?
+
   tenant       Tenant          @relation(fields: [tenantId], references: [id])
   portfolio    Portfolio?      @relation(fields: [portfolioId], references: [id], onDelete: SetNull)
   parent       Property?       @relation("PropertyUnits", fields: [parentId], references: [id], onDelete: SetNull)
@@ -228,6 +234,16 @@ model Property {
   unitAssets   UnitAsset[]
   communicationThreads CommunicationThread[]
   alddeaPassDelegations AlddeaPassDelegation[]
+  tasks        OperationalTask[]
+  contributions OwnerContribution[]
+  supplies     SupplyInventory[]
+}
+
+enum OccupancyStatus {
+  VACANT
+  OWNER_OCCUPIED
+  RENTED
+  UNDER_MAINTENANCE
 }
 
 model PropertyOwner {
@@ -357,10 +373,27 @@ model PropertyVault {
   keyName      String // e.g. "Main Door", "WiFi Network"
   keyValue     String // Encrypted at application level
   instructions String? // Optional context
+  isRotated    Boolean   @default(false)
+  lastRotatedAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  property Property @relation(fields: [propertyId], references: [id])
+  property   Property           @relation(fields: [propertyId], references: [id])
+  accessLogs VaultAccessAudit[]
+}
+
+model VaultAccessAudit {
+  id        String   @id @default(uuid())
+  tenantId  String
+  vaultId   String
+  userId    String
+  action    String   // REVEAL, ROTATE, UPDATE
+  createdAt DateTime @default(now())
+
+  vault PropertyVault @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+
+  @@index([vaultId, createdAt])
+  @@index([tenantId, userId])
 }
 
 enum VaultType {
@@ -673,10 +706,12 @@ model ManagementAgreement {
   portfolioId    String?
   commissionType CommissionType @default(PERCENTAGE_RENT)
   commissionRate Decimal        @default(0.10) // 10%
-  fixedFeeAmount Decimal?
-  commissionBase CommissionBase @default(COLLECTED)
-  reserveMinimum Decimal        @default(0)
-  effectiveFrom  DateTime
+  fixedFeeAmount        Decimal?
+  commissionBase        CommissionBase @default(COLLECTED)
+  reserveMinimum        Decimal        @default(0) // Fondo de reserva mínimo contractual
+  pmExpenseLimit        Decimal        @default(1000) // Límite de gasto autónomo del PM sin consulta
+  autoApproveCategories String[]       @default([]) // Categorías autorizadas autónomamente
+  effectiveFrom         DateTime
   effectiveTo    DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -1116,6 +1151,102 @@ model InternalNotification {
   @@index([tenantId, userId, isRead])
   @@index([tenantId, dedupeKey])
 }
+
+// =========================================================
+// CUS-09: Operación Completa, Tareas, Aportaciones e Inventario
+// =========================================================
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  BLOCKED
+  VERIFICATION_PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model OperationalTask {
+  id            String       @id @default(uuid())
+  tenantId      String
+  propertyId    String
+  title         String
+  description   String?
+  priority      TaskPriority @default(MEDIUM)
+  status        TaskStatus   @default(PENDING)
+  assigneeId    String?
+  dueDate       DateTime?
+  blockedReason String?
+  checklistJson Json         @default("[]") // [{ id, text, completed, required }]
+  sourceType    String       @default("MANUAL") // MANUAL, CHAT, INSPECTION, STAY, RECURRENT
+  sourceId      String?
+  completedAt   DateTime?
+  verifiedAt    DateTime?
+  verifiedById  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId, status])
+  @@index([tenantId, dueDate])
+}
+
+enum ContributionStatus {
+  REQUESTED
+  REPORTED
+  VERIFIED
+  CANCELLED
+}
+
+model OwnerContribution {
+  id           String             @id @default(uuid())
+  tenantId     String
+  propertyId   String
+  ownerId      String
+  amount       Decimal
+  currency     String             @default("MXN")
+  reason       String
+  status       ContributionStatus @default(REQUESTED)
+  requestedAt  DateTime           @default(now())
+  reportedAt   DateTime?
+  verifiedAt   DateTime?
+  verifiedById String?
+  evidenceUrl  String?
+  notes        String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId, status])
+  @@index([ownerId])
+}
+
+model SupplyInventory {
+  id           String   @id @default(uuid())
+  tenantId     String
+  propertyId   String
+  item         String   // e.g. "Focos LED 9W", "Pastillas Cloro", "Jabón Huésped"
+  category     String   @default("GENERAL") // CLEANING, MAINTENANCE, GUEST_AMENITY
+  currentStock Int      @default(0)
+  minimumStock Int      @default(1)
+  unit         String   @default("pza")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
 
 
 

@@ -204,7 +204,42 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       orderBy: { inspectionDate: 'desc' }
     });
 
+    // Cargar tareas operativas
+    const operationalTasks = await tx.operationalTask.findMany({
+      where: { propertyId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Cargar aportaciones del propietario
+    const ownerContributions = await tx.ownerContribution.findMany({
+      where: { propertyId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Cargar inventario de insumos
+    const supplies = await tx.supplyInventory.findMany({
+      where: { propertyId },
+      orderBy: { item: 'asc' },
+    });
+
+    // CÁLCULO FIDUCIARIO REAL: Saldo, Reserva, Comprometidos y Disponible
+    const charges = await tx.charge.findMany({
+      where: { propertyId, status: "PAID" },
+      select: { amount: true }
+    });
+    const grossIncome = charges.reduce((acc, c) => acc + Number(c.amount), 0);
+
+    const paidWorkOrders = workOrders.filter(w => w.status === "COMPLETED");
+    const totalPaidExpenses = paidWorkOrders.reduce((acc, w) => acc + Number(w.actualCost || 0), 0);
+    const ownerBalance = grossIncome - totalPaidExpenses;
+
+    const committedWorkOrders = workOrders.filter(w => w.status === "AWAITING_APPROVAL" || w.status === "IN_PROGRESS");
+    const committedFunds = committedWorkOrders.reduce((acc, w) => acc + Number(w.estimatedCost || 0), 0);
+
     const activeAgreement = property.agreements[0] || null;
+    const reserveMin = activeAgreement?.reserveMinimum ? Number(activeAgreement.reserveMinimum) : 0;
+    const pmExpenseLimit = activeAgreement?.pmExpenseLimit ? Number(activeAgreement.pmExpenseLimit) : 1000;
+    const availableFunds = Math.max(0, ownerBalance - reserveMin - committedFunds);
 
     return {
       id: property.id,
@@ -215,6 +250,10 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       fraccionamiento: property.fraccionamiento || "Independiente",
       managementType: property.managementType,
       fundCustodian: property.fundCustodian,
+      occupancyStatus: property.occupancyStatus || "VACANT",
+      primaryManagerId: property.primaryManagerId,
+      careVisitIntervalDays: property.careVisitIntervalDays || 15,
+      lastCareVisitAt: property.lastCareVisitAt?.toISOString() || null,
       cartera: property.portfolio?.name || "Sin cartera asignada",
       esUnidadHija: property.isUnit,
       inmueblePadre: property.parent?.name || null,
@@ -231,39 +270,92 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         id: activeAgreement.id,
         tipoComision: activeAgreement.commissionType,
         tasaComision: Number(activeAgreement.commissionRate),
-        reservaMinima: Number(activeAgreement.reserveMinimum),
+        reservaMinima: reserveMin,
+        pmExpenseLimit: pmExpenseLimit,
+        autoApproveCategories: activeAgreement.autoApproveCategories || [],
       } : {
         id: null,
         tipoComision: "PERCENTAGE_RENT",
         tasaComision: 0.10,
         reservaMinima: 2000,
+        pmExpenseLimit: 1000,
+        autoApproveCategories: [],
       },
+      fondosFiduciarios: {
+        saldoTotal: ownerBalance,
+        reservaMinima: reserveMin,
+        fondosComprometidos: committedFunds,
+        disponibleNuevasObligaciones: availableFunds,
+        facultadPM: pmExpenseLimit,
+      },
+      // CERO SECRETOS EN CLARO: Enmascaramiento estricto por defecto
       boveda: property.vaults.map(v => ({
         id: v.id,
         keyName: v.keyName,
         type: v.type,
-        keyValue: v.keyValue,
+        keyValue: "••••••••", // Enmascarado en la consulta normal
+        isMasked: true,
+        isRotated: v.isRotated,
+        lastRotatedAt: v.lastRotatedAt?.toISOString() || null,
         instructions: v.instructions || "",
       })),
-      ordenesConCotizacion: workOrders.map(w => ({
-        id: w.id,
-        titulo: w.title,
-        descripcion: w.description,
-        estado: w.status,
-        prioridad: w.priority,
-        costoEstimado: Number(w.estimatedCost || 0),
-        costoReal: Number(w.actualCost || 0),
-        cotizaciones: w.quotes.map(q => ({
-          id: q.id,
-          costoTotal: Number(q.totalCost),
-          costoManoObra: Number(q.laborCost),
-          costoMateriales: Number(q.materialCost),
-          estado: q.status,
-          partidas: q.itemsJson,
-          aprobadoPor: q.approvedById,
-          aprobadoEn: q.approvedAt?.toISOString() || null,
-        })),
-        requiereAprobacionOwner: Number(w.estimatedCost || 0) > (Number(activeAgreement?.reserveMinimum) || 2000),
+      ordenesConCotizacion: workOrders.map(w => {
+        const estCost = Number(w.estimatedCost || 0);
+        const requiresApproval = estCost > pmExpenseLimit;
+        const isBlockedFunds = !requiresApproval && estCost > availableFunds;
+        return {
+          id: w.id,
+          titulo: w.title,
+          descripcion: w.description,
+          estado: w.status,
+          prioridad: w.priority,
+          costoEstimado: estCost,
+          costoReal: Number(w.actualCost || 0),
+          requiereAprobacionOwner: requiresApproval,
+          bloqueadoPorFondos: isBlockedFunds,
+          cotizaciones: w.quotes.map(q => ({
+            id: q.id,
+            version: q.version || 1,
+            costoTotal: Number(q.totalCost),
+            costoManoObra: Number(q.laborCost),
+            costoMateriales: Number(q.materialCost),
+            estado: q.status,
+            partidas: q.itemsJson,
+            aprobadoPor: q.approvedById,
+            aprobadoEn: q.approvedAt?.toISOString() || null,
+          })),
+        };
+      }),
+      tareasOperativas: operationalTasks.map(t => ({
+        id: t.id,
+        titulo: t.title,
+        descripcion: t.description || "",
+        prioridad: t.priority,
+        estado: t.status,
+        fechaLimite: t.dueDate?.toISOString() || null,
+        motivoBloqueo: t.blockedReason || null,
+        checklist: t.checklistJson || [],
+        origen: t.sourceType,
+        completadoEn: t.completedAt?.toISOString() || null,
+      })),
+      aportacionesDueño: ownerContributions.map(c => ({
+        id: c.id,
+        monto: Number(c.amount),
+        moneda: c.currency,
+        motivo: c.reason,
+        estado: c.status,
+        solicitadoEn: c.requestedAt.toISOString(),
+        reportadoEn: c.reportedAt?.toISOString() || null,
+        verificadoEn: c.verifiedAt?.toISOString() || null,
+        comprobanteUrl: c.evidenceUrl || null,
+      })),
+      suministros: supplies.map(s => ({
+        id: s.id,
+        item: s.item,
+        categoria: s.category,
+        stockActual: s.currentStock,
+        stockMinimo: s.minimumStock,
+        unidad: s.unit,
       })),
       estadias: inspections.map(i => ({
         id: i.id,
@@ -281,6 +373,8 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
           remitente: m.senderName,
           rol: m.senderRole,
           contenido: m.content,
+          traduccion: (m.attachments as any)?.translatedContent || null,
+          estadoTraduccion: (m.attachments as any)?.status || "NOT_AVAILABLE",
           fecha: m.createdAt.toISOString(),
           esMio: m.senderId === membership.userId,
         }))
@@ -625,5 +719,124 @@ export async function getTenantIntegrations(requestedTenantId?: string) {
     }));
   });
 }
+
+/**
+ * CUS-09: Bandeja de Atención de Cartera (Portfolio Inbox)
+ * Consolida todas las alertas y pendientes accionables sin recorrer propiedad por propiedad:
+ * 1. Tareas vencidas o bloqueadas
+ * 2. Cotizaciones pendientes de decisión del propietario
+ * 3. Órdenes bloqueadas por falta de fondos
+ * 4. Aportaciones pendientes de verificación
+ * 5. Propiedades sin visita de cuidado reciente (> careVisitIntervalDays)
+ */
+export async function getPortfolioInboxData(requestedTenantId?: string) {
+  const { tenantId, membership } = await getSessionAndTenant(requestedTenantId);
+
+  return withTenantRLS(tenantId, async (tx) => {
+    const now = new Date();
+
+    // 1. Tareas vencidas o bloqueadas
+    const problematicTasks = await tx.operationalTask.findMany({
+      where: {
+        tenantId,
+        OR: [
+          { status: "BLOCKED" },
+          { dueDate: { lt: now }, status: { notIn: ["COMPLETED", "CANCELLED"] } }
+        ]
+      },
+      include: { property: true },
+      orderBy: { dueDate: "asc" }
+    });
+
+    // 2. Cotizaciones pendientes de aprobación del dueño
+    const pendingQuotes = await tx.workOrderQuote.findMany({
+      where: {
+        tenantId,
+        status: "SUBMITTED"
+      },
+      include: {
+        workOrder: {
+          include: { property: true }
+        }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+
+    // 3. Aportaciones reportadas pendientes de verificación
+    const pendingContributions = await tx.ownerContribution.findMany({
+      where: {
+        tenantId,
+        status: { in: ["REQUESTED", "REPORTED"] }
+      },
+      include: { property: true },
+      orderBy: { requestedAt: "desc" }
+    });
+
+    // 4. Propiedades desocupadas o bajo cuidado
+    const properties = await tx.property.findMany({
+      where: { tenantId, archivedAt: null },
+      include: {
+        portfolio: true,
+        inspections: {
+          orderBy: { inspectionDate: "desc" },
+          take: 1
+        }
+      }
+    });
+
+    const careOverdueProperties = properties.filter(p => {
+      const lastInspection = p.inspections[0]?.inspectionDate || p.lastCareVisitAt;
+      if (!lastInspection) return true;
+      const daysSince = (now.getTime() - new Date(lastInspection).getTime()) / (1000 * 3600 * 24);
+      return daysSince > (p.careVisitIntervalDays || 15);
+    });
+
+    return {
+      tareasProblema: problematicTasks.map(t => ({
+        id: t.id,
+        titulo: t.title,
+        propiedadId: t.propertyId,
+        propiedadNombre: t.property.name,
+        estado: t.status,
+        prioridad: t.priority,
+        fechaLimite: t.dueDate?.toISOString() || null,
+        motivoBloqueo: t.blockedReason || null,
+        esVencida: t.dueDate ? t.dueDate < now : false,
+      })),
+      cotizacionesPendientes: pendingQuotes.map(q => ({
+        id: q.id,
+        version: q.version,
+        ordenTitulo: q.workOrder.title,
+        propiedadId: q.workOrder.propertyId,
+        propiedadNombre: q.workOrder.property.name,
+        montoTotal: Number(q.totalCost),
+        moneda: q.currency,
+        fecha: q.createdAt.toISOString(),
+      })),
+      aportacionesPendientes: pendingContributions.map(c => ({
+        id: c.id,
+        propiedadId: c.propertyId,
+        propiedadNombre: c.property.name,
+        monto: Number(c.amount),
+        moneda: c.currency,
+        motivo: c.reason,
+        estado: c.status,
+        solicitadoEn: c.requestedAt.toISOString(),
+        comprobanteUrl: c.evidenceUrl || null,
+      })),
+      propiedadesSinVisitaReciente: careOverdueProperties.map(p => ({
+        id: p.id,
+        nombre: p.name,
+        direccion: p.address,
+        cartera: p.portfolio?.name || "General",
+        ocupacion: p.occupancyStatus,
+        frecuenciaDias: p.careVisitIntervalDays || 15,
+        ultimaVisita: p.inspections[0]?.inspectionDate?.toISOString() || null,
+      })),
+      totalAlertas: problematicTasks.length + pendingQuotes.length + pendingContributions.length + careOverdueProperties.length
+    };
+  });
+}
+
 
 

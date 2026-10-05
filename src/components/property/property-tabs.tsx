@@ -28,9 +28,13 @@ import {
   createExpenseAction,
   approveQuoteAction,
   scheduleStayAction,
-  addVaultKeyAction,
-  sendChatMessageAction
+  sendChatMessageAction,
+  requestOwnerContributionAction,
 } from "@/app/actions/property-operations.actions"
+import {
+  revealVaultSecretAction,
+  addVaultEntry,
+} from "@/app/actions/vault.actions"
 
 export function PropertyTabs({
   property,
@@ -84,6 +88,7 @@ export function PropertyTabs({
       estimatedCost: cost,
       laborCost: cost * 0.6,
       materialCost: cost * 0.4,
+      category: "MAINTENANCE",
       priority: "MEDIUM",
     });
     if (res.success) {
@@ -92,12 +97,13 @@ export function PropertyTabs({
           id: res.data?.workOrderId,
           titulo: newExpenseTitle,
           descripcion: newExpenseDesc,
-          estado: "PENDING",
+          estado: res.data?.isBlockedFunds ? "AWAITING_APPROVAL" : "PENDING",
           costoEstimado: cost,
           costoReal: 0,
-          requiereAprobacionOwner: cost > (property.acuerdo?.reservaMinima || 2000),
+          requiereAprobacionOwner: res.data?.requiresOwnerApproval,
           cotizaciones: [{
             id: res.data?.quoteId,
+            version: 1,
             costoTotal: cost,
             estado: "SUBMITTED"
           }]
@@ -111,14 +117,18 @@ export function PropertyTabs({
     setLoadingExpense(false);
   }
 
-  async function handleApproveQuote(quoteId: string, orderId: string) {
-    const res = await approveQuoteAction({ quoteId });
+  async function handleApproveQuote(quoteId: string, orderId: string, version: number = 1) {
+    const res = await approveQuoteAction({
+      quoteId,
+      expectedVersion: version,
+      reason: "Aprobado por el usuario en interfaz",
+    });
     if (res.success) {
       setOrders(orders.map((o: any) => {
         if (o.id === orderId) {
           return {
             ...o,
-            estado: "IN_PROGRESS",
+            estado: res.data?.isBlockedFunds ? "AWAITING_APPROVAL" : "IN_PROGRESS",
             cotizaciones: o.cotizaciones.map((q: any) => q.id === quoteId ? { ...q, estado: "APPROVED" } : q)
           };
         }
@@ -130,22 +140,22 @@ export function PropertyTabs({
   async function handleAddVaultKey(e: React.FormEvent) {
     e.preventDefault();
     if (!newKeyName || !newKeyValue) return;
-    const res = await addVaultKeyAction({
+    const res = await addVaultEntry({
       propertyId: property.id,
       keyName: newKeyName,
       type: newKeyType,
       keyValue: newKeyValue,
       instructions: "Configurado desde el centro de mando",
     });
-    if (res.success) {
+    if (res.success && res.data) {
       setVaultKeys([
         ...vaultKeys,
         {
-          id: res.data?.vaultId,
-          keyName: newKeyName,
-          type: newKeyType,
-          keyValue: newKeyValue,
-          instructions: "Configurado desde el centro de mando",
+          id: res.data.id,
+          keyName: res.data.keyName,
+          type: res.data.type,
+          keyValue: "••••••••",
+          instructions: res.data.instructions,
         }
       ]);
       setNewKeyName("");
@@ -153,12 +163,39 @@ export function PropertyTabs({
     }
   }
 
+  const [revealedSecrets, setRevealedSecrets] = useState<Record<string, string>>({});
+  const [loadingReveal, setLoadingReveal] = useState<Record<string, boolean>>({});
+
+  async function handleToggleReveal(vaultId: string) {
+    if (revealedSecrets[vaultId]) {
+      // Ocultar si ya estaba revelado
+      const copy = { ...revealedSecrets };
+      delete copy[vaultId];
+      setRevealedSecrets(copy);
+      return;
+    }
+
+    setLoadingReveal({ ...loadingReveal, [vaultId]: true });
+    const res = await revealVaultSecretAction({
+      vaultId,
+      propertyId: property.id,
+    });
+
+    if (res.success && res.data) {
+      setRevealedSecrets({
+        ...revealedSecrets,
+        [vaultId]: res.data.decryptedValue,
+      });
+    }
+    setLoadingReveal({ ...loadingReveal, [vaultId]: false });
+  }
+
   async function handleScheduleStay(e: React.FormEvent) {
     e.preventDefault();
     if (!stayGuestName || !stayDate) return;
     const res = await scheduleStayAction({
       propertyId: property.id,
-      inspectorName: stayGuestName,
+      guestName: stayGuestName,
       stayType: "MOVE_IN",
       arrivalDate: stayDate,
       notes: stayNotes,
@@ -513,7 +550,8 @@ export function PropertyTabs({
                   <p className="text-xs text-muted-foreground py-4 text-center">No hay claves registradas en la bóveda.</p>
                 ) : (
                   vaultKeys.map((vk: any) => {
-                    const isVisible = showKeys[vk.id];
+                    const isRevealed = !!revealedSecrets[vk.id];
+                    const isLoading = !!loadingReveal[vk.id];
                     return (
                       <div key={vk.id} className="p-3.5 rounded-xl border border-border bg-card flex items-center justify-between">
                         <div className="space-y-1">
@@ -523,21 +561,28 @@ export function PropertyTabs({
                             <Badge variant="outline" className="text-[10px] font-mono uppercase">
                               {vk.type}
                             </Badge>
+                            {vk.isRotated && (
+                              <Badge variant="secondary" className="text-[9px] bg-emerald-500/10 text-emerald-600">
+                                Rotada
+                              </Badge>
+                            )}
                           </div>
                           <p className="text-xs text-muted-foreground">{vk.instructions}</p>
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="font-mono text-sm font-bold bg-muted/60 px-3 py-1.5 rounded-lg select-all">
-                            {isVisible ? vk.keyValue : "••••••••••••"}
+                            {isRevealed ? revealedSecrets[vk.id] : "••••••••••••"}
                           </div>
                           <Button
                             type="button"
                             variant="ghost"
                             size="icon"
                             className="size-8"
-                            onClick={() => setShowKeys({ ...showKeys, [vk.id]: !isVisible })}
+                            disabled={isLoading}
+                            onClick={() => handleToggleReveal(vk.id)}
+                            title={isRevealed ? "Ocultar secreto" : "Revelar secreto (Registra auditoría)"}
                           >
-                            {isVisible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                            {isRevealed ? <EyeOff className="size-4 text-primary" /> : <Eye className="size-4" />}
                           </Button>
                         </div>
                       </div>
@@ -638,15 +683,36 @@ export function PropertyTabs({
                         <p className="text-sm leading-relaxed">{textToDisplay}</p>
                         {m.translated && (
                           <div className="pt-1 flex items-center justify-between text-[10px] opacity-90 border-t border-white/20">
-                            <span className="inline-flex items-center gap-1 font-medium">
-                              <Sparkles className="size-3" /> {dict.chatTab.autoTranslated}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setShowOriginal({ ...showOriginal, [m.id]: !isShowingOriginal })}
+                                className="underline hover:opacity-100 cursor-pointer"
+                              >
+                                {isShowingOriginal ? "Ver traducción" : dict.chatTab.viewOriginal}
+                              </button>
+                            </div>
                             <button
                               type="button"
-                              onClick={() => setShowOriginal({ ...showOriginal, [m.id]: !isShowingOriginal })}
-                              className="underline hover:opacity-100 cursor-pointer"
+                              onClick={async () => {
+                                const title = prompt("Título para la tarea operativa:", m.contenido.slice(0, 40));
+                                if (!title) return;
+                                const { convertChatMessageToTaskAction } = await import("@/app/actions/operational-task.actions");
+                                const res = await convertChatMessageToTaskAction({
+                                  propertyId: property.id,
+                                  messageId: m.id,
+                                  messageContent: m.contenido,
+                                  title,
+                                  priority: "MEDIUM",
+                                });
+                                if (res.success) {
+                                  alert(res.data?.alreadyExisted ? "Esta tarea ya había sido generada." : "¡Tarea operativa creada exitosamente!");
+                                }
+                              }}
+                              className="bg-background/20 hover:bg-background/40 px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer transition-all"
+                              title="Convertir este mensaje en una tarea con confirmación humana"
                             >
-                              {isShowingOriginal ? "Ver traducción" : dict.chatTab.viewOriginal}
+                              + Crear Tarea
                             </button>
                           </div>
                         )}

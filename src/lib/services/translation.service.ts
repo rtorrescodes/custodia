@@ -1,107 +1,111 @@
-import { z } from "zod";
+export interface TranslationResult {
+  translated: string;
+  sourceLang: "es" | "en";
+  targetLang: "es" | "en";
+  status: "TRANSLATED_AI" | "NOT_AVAILABLE" | "ERROR";
+  isAiGenerated: boolean;
+  provider: string;
+}
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "mock-key";
+// Cache en memoria para deduplicar traducciones idénticas durante navegación/recarga
+const translationCache = new Map<string, TranslationResult>();
 
 /**
- * Servicio de Traducción Rápida e Inteligente con DeepSeek / Fallback Local.
- * Traduce mensajes bidireccionalmente entre Español e Inglés preservando
- * modismos inmobiliarios, unidades monetarias y términos técnicos.
+ * Servicio de Traducción Honesta.
+ * Cumple estrictamente con la regla A2:
+ * - Si no hay proveedor real habilitado (o es mock-key), NUNCA sustituye palabras simulando ser IA.
+ * - Muestra el texto original y declara explícitamente status = "NOT_AVAILABLE".
+ * - Preserva original, idiomas de origen/destino, estado y procedencia.
+ * - Deduplica peticiones idénticas evitando llamadas innecesarias.
  */
 export async function translateText(
   text: string,
   targetLang: "es" | "en"
-): Promise<{ translated: string; sourceLang: "es" | "en"; isAiGenerated: boolean }> {
-  if (!text || text.trim().length === 0) {
-    return { translated: "", sourceLang: targetLang, isAiGenerated: false };
-  }
-
+): Promise<TranslationResult> {
+  const clean = text?.trim() || "";
   const detectedSource: "es" | "en" = targetLang === "en" ? "es" : "en";
 
-  // Si no hay API key real configurada o estamos en desarrollo sin consumo facturable,
-  // aplicamos un traductor semántico fidedigno para la demo con respaldo instantáneo.
-  if (DEEPSEEK_API_KEY === "mock-key" || !DEEPSEEK_API_KEY) {
-    const mockTranslations: Record<string, string> = {
-      // ES -> EN
-      "hola": "Hello",
-      "el aire acondicionado necesita mantenimiento": "The air conditioning unit requires maintenance",
-      "se reemplazó el filtro de la alberca": "The pool filter has been replaced",
-      "tenemos una fuga de agua en el baño principal": "We have a water leak in the master bathroom",
-      "el costo estimado es de $3,500 mxn": "The estimated cost is $3,500 MXN",
-      "por favor autoriza el presupuesto": "Please approve the repair quote",
-      "limpieza completada para tu llegada": "Deep cleaning completed for your arrival",
-      // EN -> ES
-      "hello": "Hola",
-      "the air conditioning unit requires maintenance": "El aire acondicionado requiere mantenimiento",
-      "please approve the repair quote": "Por favor aprueba la cotización de reparación",
-      "i will arrive on friday with 4 guests": "Llegaré el viernes con 4 invitados",
-      "make sure the wifi code is active": "Asegúrate de que el código de Wi-Fi esté activo",
-      "approved, thank you": "Aprobado, muchas gracias",
+  if (!clean) {
+    return {
+      translated: "",
+      sourceLang: detectedSource,
+      targetLang,
+      status: "NOT_AVAILABLE",
+      isAiGenerated: false,
+      provider: "none",
     };
-
-    const clean = text.trim().toLowerCase();
-    const directMatch = mockTranslations[clean];
-
-    if (directMatch) {
-      return {
-        translated: directMatch,
-        sourceLang: detectedSource,
-        isAiGenerated: true,
-      };
-    }
-
-    // Traducción contextual heurística para texto libre en demo
-    if (targetLang === "en") {
-      return {
-        translated: `[EN Translation]: ${text}`,
-        sourceLang: "es",
-        isAiGenerated: true,
-      };
-    } else {
-      return {
-        translated: `[Traducción ES]: ${text}`,
-        sourceLang: "en",
-        isAiGenerated: true,
-      };
-    }
   }
 
-  // Llamada oficial a DeepSeek Chat API
+  // Deduplicación en memoria
+  const cacheKey = `${detectedSource}->${targetLang}:${clean}`;
+  if (translationCache.has(cacheKey)) {
+    return translationCache.get(cacheKey)!;
+  }
+
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const isRealProviderConfigured = apiKey && apiKey !== "mock-key" && !apiKey.startsWith("mock-");
+
+  // Si no hay proveedor configurado, devolver original con honestidad
+  if (!isRealProviderConfigured) {
+    const result: TranslationResult = {
+      translated: clean, // Preserva original íntegro
+      sourceLang: detectedSource,
+      targetLang,
+      status: "NOT_AVAILABLE",
+      isAiGenerated: false,
+      provider: "none",
+    };
+    translationCache.set(cacheKey, result);
+    return result;
+  }
+
+  // Llamada al proveedor real (DeepSeek Chat API)
   try {
     const prompt = targetLang === "en"
-      ? `You are an expert bilingual real estate and property management translator. Translate the following text faithfully from Spanish into English. Maintain a professional and friendly tone. Return ONLY the translated string without quotes or notes:\n\n${text}`
-      : `Eres un traductor experto bilingüe en property management y bienes raíces. Traduce el siguiente texto fielmente del inglés al español. Mantén un tono profesional y cordial. Devuelve ÚNICAMENTE el texto traducido sin notas ni comillas:\n\n${text}`;
+      ? `You are an expert bilingual property management translator. Translate faithfully from Spanish to English. Maintain numbers, dates and monetary units exactly. Return ONLY the translation:\n\n${clean}`
+      : `Eres un traductor experto bilingüe en administración de propiedades. Traduce fielmente del inglés al español. Mantén números, fechas y monedas intactos. Devuelve ÚNICAMENTE la traducción:\n\n${clean}`;
 
     const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${DEEPSEEK_API_KEY}`,
+        "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: "deepseek-chat",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.1,
       }),
+      signal: AbortSignal.timeout(6000), // Timeout acotado de 6s
     });
 
     if (!res.ok) {
-      throw new Error(`DeepSeek API returned HTTP ${res.status}`);
+      throw new Error(`HTTP ${res.status}`);
     }
 
     const data = await res.json();
-    const translated = data.choices?.[0]?.message?.content?.trim() || text;
+    const translatedText = data.choices?.[0]?.message?.content?.trim() || clean;
 
-    return {
-      translated,
+    const result: TranslationResult = {
+      translated: translatedText,
       sourceLang: detectedSource,
+      targetLang,
+      status: "TRANSLATED_AI",
       isAiGenerated: true,
+      provider: "deepseek-chat",
     };
+    translationCache.set(cacheKey, result);
+    return result;
   } catch (err: any) {
-    console.error("Error en translateText con DeepSeek:", err.message);
-    return {
-      translated: targetLang === "en" ? `[EN]: ${text}` : `[ES]: ${text}`,
+    console.warn("Fallo o timeout de DeepSeek, fallback honesto:", err?.message);
+    const fallback: TranslationResult = {
+      translated: clean,
       sourceLang: detectedSource,
+      targetLang,
+      status: "ERROR",
       isAiGenerated: false,
+      provider: "deepseek-failed",
     };
+    return fallback;
   }
 }
