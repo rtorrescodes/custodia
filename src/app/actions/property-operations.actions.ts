@@ -316,32 +316,86 @@ export async function requestOwnerContributionAction(data: z.infer<typeof reques
 }
 
 // -------------------------------------------------------------
-// 5. Reportar Aportación por el Dueño (Comprobante Subido)
+// 5. Reportar Aportación por el Dueño (Formulario Accesible y Evidencia Privada)
 // -------------------------------------------------------------
 const reportContributionSchema = z.object({
   contributionId: z.string().uuid(),
-  evidenceUrl: z.string().url().or(z.string().min(3)),
+  reference: z.string().min(3, "La referencia bancaria es requerida"),
+  transferDate: z.string().min(8, "La fecha de transferencia es requerida"),
+  reportedAmount: z.number().positive("El importe reportado debe ser mayor a 0"),
+  reportedCurrency: z.string().default("MXN"),
   notes: z.string().optional(),
+  fileBase64: z.string().optional(),
+  fileName: z.string().optional(),
+  fileMimeType: z.string().optional(),
 })
 
 export async function reportOwnerContributionAction(data: z.infer<typeof reportContributionSchema>) {
-  return safeAction(reportContributionSchema, data, async (input, tenantId) => {
+  return safeAction(reportContributionSchema, data, async (input, tenantId, userId) => {
     return withTenantRLS(tenantId, async (tx) => {
+      const contribution = await tx.ownerContribution.findUnique({
+        where: { id: input.contributionId, tenantId },
+      });
+
+      if (!contribution) {
+        throw new Error("Solicitud de aportación no encontrada");
+      }
+
+      // Si ya está verificada, no se puede sobrescribir
+      if (contribution.status === "VERIFIED") {
+        throw new Error("Esta aportación ya fue verificada y liberada.");
+      }
+
+      let storagePath = contribution.evidenceUrl;
+
+      // Subida de comprobante al almacenamiento privado si se proporcionó archivo
+      if (input.fileBase64 && input.fileName && input.fileMimeType) {
+        const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
+        const fileBuffer = Buffer.from(input.fileBase64, "base64");
+        const uploadResult = await evidenceStorageService.uploadFile({
+          tenantId,
+          propertyId: contribution.propertyId,
+          filename: input.fileName,
+          buffer: fileBuffer,
+          mimeType: input.fileMimeType,
+        });
+        storagePath = uploadResult.path;
+      }
+
+      // Si hay discrepancia de importe solicitado vs reportado, se registra explícitamente en notas
+      const requestedAmt = Number(contribution.amount);
+      const diff = input.reportedAmount - requestedAmt;
+      const discrepancyNote = diff !== 0
+        ? `[REVISIÓN DE IMPORTE]: Solicitado: $${requestedAmt.toLocaleString()} ${contribution.currency} | Reportado: $${input.reportedAmount.toLocaleString()} ${input.reportedCurrency} (Diferencia: ${diff > 0 ? "+" : ""}$${diff.toLocaleString()})`
+        : "";
+
+      const combinedNotes = [
+        `Ref: ${input.reference} · Fecha transf: ${input.transferDate}`,
+        input.notes ? `Nota: ${input.notes}` : "",
+        discrepancyNote
+      ].filter(Boolean).join(" | ");
+
       // Un comprobante reportado NO libera fondos automáticamente; pasa a REPORTED
       const updated = await tx.ownerContribution.update({
         where: { id: input.contributionId, tenantId },
         data: {
           status: "REPORTED",
           reportedAt: new Date(),
-          evidenceUrl: input.evidenceUrl,
-          notes: input.notes,
+          reference: input.reference,
+          evidenceUrl: storagePath,
+          notes: combinedNotes,
         }
       });
 
       return {
         contributionId: updated.id,
         status: updated.status,
-        verified: false, // Aún no disponible para gastar
+        requestedAmount: requestedAmt,
+        reportedAmount: input.reportedAmount,
+        currency: input.reportedCurrency,
+        discrepancy: diff !== 0,
+        verified: false, // Cero liberación prematura
+        message: "Transferencia reportada. Pendiente de verificar recepción."
       };
     });
   });
@@ -442,6 +496,26 @@ export async function verifyOwnerContributionAction(data: z.infer<typeof verifyC
         availableAt: updatedContribution.availableAt,
       };
     });
+  });
+}
+
+// -------------------------------------------------------------
+// 6B. Obtener URL temporal firmada para consultar evidencia privada
+// -------------------------------------------------------------
+const getSignedEvidenceSchema = z.object({
+  storagePath: z.string().min(3),
+})
+
+export async function getEvidenceSignedUrlAction(data: z.infer<typeof getSignedEvidenceSchema>) {
+  return safeAction(getSignedEvidenceSchema, data, async (input, tenantId) => {
+    // Verificar que la ruta pertenece al tenant actual (Zero-Trust path traversal prevention)
+    if (!input.storagePath.startsWith(`${tenantId}/`) && !input.storagePath.startsWith("http")) {
+      throw new Error("Acceso no autorizado al archivo solicitado");
+    }
+
+    const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
+    const signedUrl = await evidenceStorageService.getSignedViewUrl(input.storagePath, 900); // 15 minutos
+    return { signedUrl };
   });
 }
 

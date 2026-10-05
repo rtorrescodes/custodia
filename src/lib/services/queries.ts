@@ -171,6 +171,7 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       ownerContributions,
       supplies,
       commThreadRaw,
+      teamMembersRaw,
     ] = await Promise.all([
       tx.workOrder.findMany({
         where: { propertyId },
@@ -202,6 +203,11 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         include: {
           messages: { orderBy: { createdAt: 'asc' } }
         }
+      }),
+      tx.tenantMember.findMany({
+        where: { tenantId, status: "ACTIVE" },
+        include: { user: true },
+        orderBy: { joinedAt: "asc" }
       }),
     ]);
 
@@ -326,18 +332,29 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
           })),
         };
       }),
-      tareasOperativas: operationalTasks.map(t => ({
-        id: t.id,
-        titulo: t.title,
-        descripcion: t.description || "",
-        prioridad: t.priority,
-        estado: t.status,
-        fechaLimite: t.dueDate?.toISOString() || null,
-        motivoBloqueo: t.blockedReason || null,
-        checklist: t.checklistJson || [],
-        origen: t.sourceType,
-        completadoEn: t.completedAt?.toISOString() || null,
+      teamMembers: teamMembersRaw.map(m => ({
+        id: m.userId,
+        email: m.user.email,
+        role: m.role,
       })),
+      tareasOperativas: operationalTasks.map(t => {
+        const assignee = teamMembersRaw.find(m => m.userId === t.assigneeId);
+        return {
+          id: t.id,
+          titulo: t.title,
+          descripcion: t.description || "",
+          prioridad: t.priority,
+          estado: t.status,
+          assigneeId: t.assigneeId,
+          assigneeName: assignee ? assignee.user.email : null,
+          fechaLimite: t.dueDate?.toISOString() || null,
+          motivoBloqueo: t.blockedReason || null,
+          checklist: t.checklistJson || [],
+          origen: t.sourceType,
+          origenId: t.sourceId,
+          completadoEn: t.completedAt?.toISOString() || null,
+        };
+      }),
       aportacionesDueño: ownerContributions.map(c => ({
         id: c.id,
         monto: Number(c.amount),
@@ -357,15 +374,32 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         stockMinimo: s.minimumStock,
         unidad: s.unit,
       })),
-      estadias: inspections.map(i => ({
-        id: i.id,
-        tipo: i.type,
-        estado: i.status,
-        responsable: i.inspectorName,
-        fecha: i.inspectionDate.toISOString(),
-        notas: i.summaryNotes || "",
-        checklist: i.checklistJson || {},
-      })),
+      estadias: inspections.map(i => {
+        // Encontrar tareas operativas de preparación asociadas a esta estancia
+        const linkedTasks = operationalTasks.filter(
+          t => t.sourceId === i.id || (t.sourceType === "STAY" && t.title.toLowerCase().includes("suministro"))
+        );
+        return {
+          id: i.id,
+          tipo: i.type,
+          estado: i.status,
+          responsable: i.inspectorName,
+          fecha: i.inspectionDate.toISOString(),
+          notas: i.summaryNotes || "",
+          checklist: i.checklistJson || {},
+          linkedTasks: linkedTasks.map(lt => {
+            const assignee = teamMembersRaw.find(m => m.userId === lt.assigneeId);
+            return {
+              id: lt.id,
+              titulo: lt.title,
+              estado: lt.status,
+              assigneeId: lt.assigneeId,
+              assigneeName: assignee ? assignee.user.email : "Sin asignar",
+              dueDate: lt.dueDate?.toISOString() || null,
+            };
+          }),
+        };
+      }),
       chat: {
         threadId: commThread.id,
         mensajes: commThread.messages.map(m => ({
@@ -809,13 +843,14 @@ export async function getPortfolioInboxData(requestedTenantId?: string) {
   return withTenantRLS(tenantId, async (tx) => {
     const now = new Date();
 
-    // 1. Tareas vencidas o bloqueadas
+    // 1. Tareas vencidas, bloqueadas o de preparación de llegada pendientes
     const problematicTasks = await tx.operationalTask.findMany({
       where: {
         tenantId,
         OR: [
           { status: "BLOCKED" },
-          { dueDate: { lt: now }, status: { notIn: ["COMPLETED", "CANCELLED"] } }
+          { dueDate: { lt: now }, status: { notIn: ["COMPLETED", "CANCELLED"] } },
+          { sourceType: "STAY", status: { notIn: ["COMPLETED", "CANCELLED"] } }
         ]
       },
       include: { property: true },

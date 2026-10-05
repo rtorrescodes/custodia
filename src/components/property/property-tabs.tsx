@@ -39,6 +39,7 @@ import {
   recordVendorPaymentAction,
 } from "@/app/actions/property-operations.actions"
 import {
+  createOperationalTaskAction,
   updateOperationalTaskStatusAction,
   requestTaskVerificationAction,
   resolveTaskVerificationAction,
@@ -89,6 +90,9 @@ export function PropertyTabs({
   const [stayGuestName, setStayGuestName] = useState("");
   const [stayDate, setStayDate] = useState("");
   const [stayNotes, setStayNotes] = useState("");
+  const [assigningStayId, setAssigningStayId] = useState<string | null>(null);
+  const [selectedAssignee, setSelectedAssignee] = useState<Record<string, string>>({});
+  const [assigningLoading, setAssigningLoading] = useState<Record<string, boolean>>({});
 
   // Estado de Chat PM-Dueño
   const [chatMessages, setChatMessages] = useState<any[]>(property.chat?.mensajes || []);
@@ -275,6 +279,59 @@ export function PropertyTabs({
     }
   }
 
+  async function handleAssignStayPreparationTask(stayId: string, stayDate: string, stayGuest: string) {
+    const assigneeId = selectedAssignee[stayId];
+    if (!assigneeId) {
+      alert("Por favor selecciona un integrante del equipo.");
+      return;
+    }
+    setAssigningLoading({ ...assigningLoading, [stayId]: true });
+    const assigneeUser = property.teamMembers?.find((m: any) => m.id === assigneeId);
+
+    const res = await createOperationalTaskAction({
+      propertyId: property.id,
+      title: `Preparación de llegada: Suministros e insumos para ${stayGuest}`,
+      description: `Verificar surtido completo de insumos, sábanas, toallas y condiciones del inmueble previo a la llegada del ${new Date(stayDate).toLocaleDateString()}.`,
+      priority: "HIGH",
+      dueDate: stayDate,
+      sourceType: "STAY",
+      sourceId: stayId,
+      assigneeId: assigneeId,
+      checklist: [
+        { id: "1", text: "Inspeccionar y colocar sábanas y toallas limpias", completed: false, required: true },
+        { id: "2", text: "Verificar stock de insumos básicos (jabón, papel, café)", completed: false, required: true },
+        { id: "3", text: "Validar encendido y funcionamiento de aires acondicionados", completed: false, required: false },
+      ]
+    });
+
+    if (res.success && res.data) {
+      const newTask = {
+        id: res.data.taskId,
+        titulo: `Preparación de llegada: Suministros e insumos para ${stayGuest}`,
+        estado: res.data.status,
+        assigneeId: assigneeId,
+        assigneeName: assigneeUser ? assigneeUser.email : "Equipo Operativo",
+        dueDate: stayDate,
+      };
+
+      setStays(stays.map((s: any) => {
+        if (s.id === stayId) {
+          const currentLinked = s.linkedTasks || [];
+          const exists = currentLinked.some((t: any) => t.id === res.data?.taskId);
+          return {
+            ...s,
+            linkedTasks: exists ? currentLinked.map((t: any) => t.id === res.data?.taskId ? newTask : t) : [...currentLinked, newTask]
+          };
+        }
+        return s;
+      }));
+      setAssigningStayId(null);
+    } else {
+      alert("Error al asignar tarea: " + (res.error || "No se pudo asignar"));
+    }
+    setAssigningLoading({ ...assigningLoading, [stayId]: false });
+  }
+
   async function handleSendMessage(e: React.FormEvent) {
     e.preventDefault();
     if (!msgInput.trim()) return;
@@ -337,14 +394,22 @@ export function PropertyTabs({
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 h-auto p-1 bg-muted/60 rounded-xl gap-1">
+        <TabsList className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-9 h-auto p-1 bg-muted/60 rounded-xl gap-1">
           <TabsTrigger value="expenses" className="text-xs py-2">
             <DollarSign className="size-3.5 mr-1" />
             {dict.tabs.expenses}
           </TabsTrigger>
-          <TabsTrigger value="governance" className="text-xs py-2">
-            <Layers className="size-3.5 mr-1" />
-            {dict.tabs.governance}
+          <TabsTrigger value="tasks" className="text-xs py-2">
+            <Wrench className="size-3.5 mr-1" />
+            {dict.tabs.tasks}
+          </TabsTrigger>
+          <TabsTrigger value="vendorPayments" className="text-xs py-2">
+            <DollarSign className="size-3.5 mr-1 text-emerald-600" />
+            {dict.tabs.vendorPayments}
+          </TabsTrigger>
+          <TabsTrigger value="settlements" className="text-xs py-2">
+            <Receipt className="size-3.5 mr-1 text-purple-600" />
+            {dict.tabs.settlements}
           </TabsTrigger>
           <TabsTrigger value="stays" className="text-xs py-2">
             <CalendarDays className="size-3.5 mr-1" />
@@ -363,7 +428,7 @@ export function PropertyTabs({
             {dict.tabs.chat}
           </TabsTrigger>
           <TabsTrigger value="agreement" className="text-xs py-2">
-            <Receipt className="size-3.5 mr-1" />
+            <Layers className="size-3.5 mr-1" />
             {dict.tabs.agreement}
           </TabsTrigger>
         </TabsList>
@@ -446,6 +511,10 @@ export function PropertyTabs({
                                 <CheckCircle2 className="size-3.5 mr-1" />
                                 {dict.expensesTab.approveAction}
                               </Button>
+                            ) : quote?.estado === "APPROVED" && (o.estado === "AWAITING_APPROVAL" || o.bloqueadoPorFondos) ? (
+                              <Badge variant="outline" className="text-amber-600 border-amber-500/30 bg-amber-500/10 font-medium">
+                                Aprobada, pendiente de fondos
+                              </Badge>
                             ) : quote?.estado === "APPROVED" ? (
                               <Badge variant="outline" className="text-emerald-500 border-emerald-500/30">
                                 ✓ {dict.expensesTab.approved}
@@ -538,23 +607,96 @@ export function PropertyTabs({
                         </span>
                       </div>
 
-                      <div className="rounded-lg bg-muted/30 p-2.5 text-xs space-y-1.5">
-                        <p className="font-semibold text-foreground text-[11px] uppercase tracking-wider">
-                          {dict.staysTab.prepChecklist}:
+                      <div className="rounded-lg bg-muted/30 p-3 text-xs space-y-2 border border-border/50">
+                        <p className="font-semibold text-foreground text-[11px] uppercase tracking-wider flex items-center justify-between">
+                          <span>{dict.staysTab.prepChecklist}</span>
+                          <span className="text-[10px] text-muted-foreground font-normal lowercase">operación en sitio</span>
                         </p>
-                        <div className="grid grid-cols-2 gap-2 text-muted-foreground">
-                          <span className="flex items-center gap-1.5 text-emerald-500">
-                            <CheckCircle2 className="size-3.5" /> {dict.staysTab.cleaningDone}
-                          </span>
-                          <span className="flex items-center gap-1.5 text-emerald-500">
-                            <CheckCircle2 className="size-3.5" /> {dict.staysTab.acChecked}
-                          </span>
-                          <span className="flex items-center gap-1.5 text-emerald-500">
-                            <CheckCircle2 className="size-3.5" /> {dict.staysTab.suppliesReady}
-                          </span>
-                          <span className="flex items-center gap-1.5 text-emerald-500">
-                            <CheckCircle2 className="size-3.5" /> {dict.staysTab.qrEmitted}
-                          </span>
+
+                        <div className="space-y-2 text-xs divide-y divide-border/40">
+                          {/* Requisito 1: Suministros e Insumos */}
+                          <div className="pt-1.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div>
+                              <span className="font-medium text-foreground flex items-center gap-1.5">
+                                <Package className="size-3.5 text-primary" />
+                                {dict.staysTab.suppliesReady}
+                              </span>
+                              <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2">
+                                <span>{dict.staysTab.assigneeLabel}</span>
+                                {s.linkedTasks && s.linkedTasks.length > 0 ? (
+                                  <span className="font-semibold text-foreground bg-primary/10 text-primary px-2 py-0.5 rounded">
+                                    {s.linkedTasks[0].assigneeName || "Equipo asignado"}
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    {dict.staysTab.unassigned}
+                                  </span>
+                                )}
+                                <span>· {dict.staysTab.dueLabel} {new Date(s.fecha).toLocaleDateString()}</span>
+                              </div>
+                            </div>
+
+                            <div className="shrink-0 flex items-center gap-2">
+                              {s.linkedTasks && s.linkedTasks.length > 0 ? (
+                                <Badge variant="outline" className="text-emerald-600 border-emerald-500/30 bg-emerald-500/5 text-[11px]">
+                                  ✓ {s.linkedTasks[0].estado}
+                                </Badge>
+                              ) : assigningStayId === s.id ? (
+                                <div className="flex items-center gap-1.5">
+                                  <select
+                                    className="h-8 text-xs rounded-lg border border-border bg-background px-2"
+                                    value={selectedAssignee[s.id] || ""}
+                                    onChange={(e) => setSelectedAssignee({ ...selectedAssignee, [s.id]: e.target.value })}
+                                  >
+                                    <option value="">Seleccionar personal...</option>
+                                    {(property.teamMembers || []).map((m: any) => (
+                                      <option key={m.id} value={m.id}>
+                                        {m.email} ({m.role})
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <Button
+                                    size="sm"
+                                    className="h-8 text-xs rounded-lg"
+                                    disabled={assigningLoading[s.id]}
+                                    onClick={() => handleAssignStayPreparationTask(s.id, s.fecha, s.responsable)}
+                                  >
+                                    {assigningLoading[s.id] ? "Asignando..." : "Confirmar"}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 text-xs"
+                                    onClick={() => setAssigningStayId(null)}
+                                  >
+                                    Cancelar
+                                  </Button>
+                                </div>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-[11px] rounded-lg border-primary/30 text-primary hover:bg-primary/5"
+                                  onClick={() => setAssigningStayId(s.id)}
+                                >
+                                  {dict.staysTab.assignTaskBtn}
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Requisitos complementarios */}
+                          <div className="pt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-muted-foreground text-[11px]">
+                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                              <CheckCircle2 className="size-3" /> {dict.staysTab.cleaningDone}
+                            </span>
+                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                              <CheckCircle2 className="size-3" /> {dict.staysTab.acChecked}
+                            </span>
+                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                              <CheckCircle2 className="size-3" /> {dict.staysTab.qrEmitted}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -991,9 +1133,9 @@ export function PropertyTabs({
           </div>
         </TabsContent>
 
-        <TabsContent value="governance" className="space-y-6 pt-4">
+        {/* ---------------- 6. TAREAS OPERATIVAS & VERIFICACIÓN ---------------- */}
+        <TabsContent value="tasks" className="space-y-6 pt-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Tareas Operativas & Verificación */}
             <Card className="border-border">
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -1016,35 +1158,6 @@ export function PropertyTabs({
               </CardContent>
             </Card>
 
-            {/* Pagos a Proveedores y Compromisos */}
-            <Card className="border-border">
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <DollarSign className="h-4 w-4 text-emerald-600" />
-                  Liquidación a Proveedores
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  Pagos parciales y finiquitos vinculados a órdenes verificadas
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 text-sm">
-                <p className="text-xs text-muted-foreground">
-                  Consume saldo disponible bajo custodia y amortiza el compromiso financiero de la orden sin duplicar asientos contables.
-                </p>
-                <div className="p-3 bg-muted/40 rounded-lg text-xs space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Custodia financiera:</span>
-                    <span className="font-semibold text-foreground">Separación estricta de fondos y depósitos</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Condición de pago:</span>
-                    <span className="font-semibold text-emerald-600">Verificación PM previa aprobada</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Ciclo de Vida: Renovación y Salida */}
             <Card className="border-border">
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -1064,24 +1177,107 @@ export function PropertyTabs({
                 </Badge>
               </CardContent>
             </Card>
+          </div>
+        </TabsContent>
 
-            {/* Informe de Desempeño y Handoff */}
+        {/* ---------------- 7. PAGOS A PROVEEDORES & COMPROMISOS ---------------- */}
+        <TabsContent value="vendorPayments" className="space-y-6 pt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card className="border-border">
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
-                  <Receipt className="h-4 w-4 text-purple-600" />
-                  Gobernanza y Entrega de Cartera
+                  <DollarSign className="h-4 w-4 text-emerald-600" />
+                  Liquidación a Proveedores y Órdenes
                 </CardTitle>
                 <CardDescription className="text-xs">
-                  Generación de reportes bilingües y desvinculación formal de PM
+                  Pagos parciales y finiquitos vinculados a órdenes de trabajo verificadas
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 text-sm">
                 <p className="text-xs text-muted-foreground">
-                  El propietario puede consultar su informe en español o inglés. La entrega formal de administración transfiere tareas pendientes y revoca facultades del PM saliente.
+                  Consume saldo disponible bajo custodia y amortiza el compromiso financiero de la orden sin duplicar asientos contables ni comprometer depósitos en garantía.
+                </p>
+                <div className="p-3 bg-muted/40 rounded-lg text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Custodia financiera:</span>
+                    <span className="font-semibold text-foreground">Separación estricta de fondos y depósitos</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Condición indispensable:</span>
+                    <span className="font-semibold text-emerald-600">Verificación PM aprobada previamente</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-blue-600" />
+                  Política de Fondos y Retención
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Alineación fiduciaria con el fondo de reserva
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-xs text-muted-foreground">
+                <p>
+                  Si la orden supera los fondos libres bajo custodia, se requiere que el propietario apruebe una aportación complementaria antes de liberar el pago final al proveedor.
+                </p>
+                <Badge variant="outline" className="border-emerald-500/40 text-emerald-600">
+                  Control Estricto: Cero Desvío de Fondos
+                </Badge>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* ---------------- 8. LIQUIDACIONES AL PROPIETARIO ---------------- */}
+        <TabsContent value="settlements" className="space-y-6 pt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card className="border-border">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Receipt className="h-4 w-4 text-purple-600" />
+                  Liquidaciones Periódicas al Dueño
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Distribución neta de ingresos por rentas y transferencias de saldos
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  El propietario puede consultar su informe en español o inglés y revisar la liquidación neta tras retención de comisión y constitución de la reserva contractual.
+                </p>
+                <div className="p-3 bg-muted/40 rounded-lg text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Frecuencia habitual:</span>
+                    <span className="font-semibold text-foreground">Mensual (primeros 5 días hábiles)</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Deducción de reserva:</span>
+                    <span className="font-semibold text-foreground">Automática hasta cumplir meta acordada</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 text-primary" />
+                  Gobernanza y Entrega de Cartera
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Emisión de informes y desvinculación formal de PM
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                <p className="text-xs text-muted-foreground">
+                  Al completar el período de administración o acordar un cambio de PM, se genera el acta de entrega formal con el corte de caja, bitácora de activos e inventario de insumos.
                 </p>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 p-2 rounded border border-border">
-                  <ShieldAlert className="h-4 w-4 shrink-0 text-primary" />
+                  <ShieldAlert className="size-4 shrink-0 text-primary" />
                   <span>Control Perimetral: Emisión de credenciales y pases enlazados al control de acceso residencial.</span>
                 </div>
               </CardContent>

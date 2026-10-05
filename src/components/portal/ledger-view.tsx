@@ -75,18 +75,18 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
             <CardTitle className="text-sm font-semibold flex items-center justify-between">
               <span>Desglose de Fondos y Disponibilidad Operativa</span>
               <span className={cn(
-                "px-2 py-0.5 rounded-full text-xs font-mono font-medium",
+                "px-2.5 py-0.5 rounded-full text-xs font-mono font-medium",
                 fid.esDeficitario
                   ? "bg-rose-500/10 text-rose-600 border border-rose-500/30"
                   : fid.reservaFaltante > 0
-                  ? "bg-amber-500/10 text-amber-600 border border-amber-500/30"
+                  ? "bg-blue-500/10 text-blue-600 border border-blue-500/30"
                   : "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30"
               )}>
                 {fid.esDeficitario
-                  ? "Cuenta con Déficit Real"
+                  ? "Déficit Real (Obligaciones sin cubrir)"
                   : fid.reservaFaltante > 0
-                  ? "Reserva Parcial / Faltante"
-                  : "Fondo de Reserva Completo"}
+                  ? "Reserva Parcial (Meta en curso)"
+                  : "Reserva Completa"}
               </span>
             </CardTitle>
           </CardHeader>
@@ -96,39 +96,47 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
               <p className="font-mono font-bold text-sm text-foreground mt-0.5">
                 ${fid.custodiaPmEfectiva.toLocaleString()} MXN
               </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Efectivo depositado por el dueño</p>
             </div>
             <div>
               <p className="text-muted-foreground">Depósito Garantía (Pasivo):</p>
               <p className="font-mono font-medium text-sm text-amber-600 dark:text-amber-400 mt-0.5">
                 −${fid.depositosGarantiaRetenidos.toLocaleString()} MXN
               </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Fondos del inquilino en resguardo</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Reserva Constituida / Meta:</p>
+              <p className="text-muted-foreground">Reserva para Contingencias:</p>
               <p className="font-mono font-medium text-sm text-foreground mt-0.5">
-                ${fid.reservaConstituida.toLocaleString()} / ${fid.reservaMinima.toLocaleString()} MXN
+                ${fid.reservaConstituida.toLocaleString()} MXN
               </p>
-              {fid.reservaFaltante > 0 && (
-                <p className="text-[10px] text-amber-600 mt-0.5">
-                  Faltante por aportar: ${fid.reservaFaltante.toLocaleString()} MXN
-                </p>
-              )}
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Meta acordada: ${fid.reservaMinima.toLocaleString()} MXN
+                {fid.reservaFaltante > 0 && (
+                  <span className="block text-blue-600 dark:text-blue-400">
+                    (Faltante para meta: ${fid.reservaFaltante.toLocaleString()} MXN · No es deuda)
+                  </span>
+                )}
+              </p>
             </div>
             <div>
               <p className="text-muted-foreground">Compromisos Aprobados:</p>
               <p className="font-mono font-medium text-sm text-muted-foreground mt-0.5">
                 −${fid.compromisosVigentes.toLocaleString()} MXN
               </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Órdenes en ejecución</p>
             </div>
-            <div className="col-span-2 md:col-span-4 pt-2 border-t border-border flex items-center justify-between">
+            <div className="col-span-2 md:col-span-4 pt-3 border-t border-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
               <div>
-                <span className="font-semibold text-foreground">Disponible para Nuevas Operaciones:</span>
-                <p className="text-[11px] text-muted-foreground">
-                  (Efectivo neto bajo custodia − Reserva constituida − Compromisos aprobados)
+                <span className="font-semibold text-foreground text-sm">Disponible para Nuevas Operaciones:</span>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {fid.disponibleNuevasObligaciones === 0
+                    ? "Saldo actual $0 MXN. Para ordenar nuevos trabajos o servicios adicionales, se requiere una aportación previa o cobranza entrante."
+                    : "(Efectivo neto bajo custodia − Reserva constituida − Compromisos aprobados)"}
                 </p>
               </div>
               <span className={cn(
-                "text-base font-bold font-mono",
+                "text-lg font-bold font-mono shrink-0",
                 fid.esDeficitario ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
               )}>
                 ${fid.disponibleNuevasObligaciones.toLocaleString()} MXN
@@ -141,7 +149,9 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
       <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 p-4 text-xs text-neutral-600 dark:text-neutral-400 flex flex-col sm:flex-row justify-between gap-2 items-start sm:items-center">
         <div>
           <span className="font-semibold text-neutral-900 dark:text-neutral-100">Transparencia Financiera Fiduciaria:</span>
-          <p className="mt-0.5">El disponible para liquidación deduce comisiones contractuales, gastos autorizados y reservas constituidas. Los depósitos en garantía se mantienen en custodia separada y no aumentan el saldo distribuible.</p>
+          <p className="mt-0.5">
+            El disponible para nuevas operaciones deduce comisiones y compromisos autorizados. La reserva es un colchón para emergencias (no una deuda vencida). Los depósitos en garantía se mantienen en custodia separada sin mezclarse con el gasto operativo.
+          </p>
         </div>
       </div>
     </div>
@@ -233,7 +243,8 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
 }
 
 import { approveTransaction } from "@/app/actions/portal.actions"
-import { approveQuoteAction, reportOwnerContributionAction } from "@/app/actions/property-operations.actions"
+import { approveQuoteAction, reportOwnerContributionAction, getEvidenceSignedUrlAction } from "@/app/actions/property-operations.actions"
+import { TransferReportModal } from "./transfer-report-modal"
 
 const UMBRAL_APROBACION = 3000 // gastos por encima requieren aprobación
 
@@ -243,6 +254,23 @@ export function LedgerView({ data, propertyId }: { data: LedgerProps, propertyId
   const [quotes, setQuotes] = useState(data.cotizacionesPendientes || [])
   const [contributions, setContributions] = useState(data.aportacionesFondos || [])
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  // Estado para el modal accesible de reporte de transferencia
+  const [selectedContributionForReport, setSelectedContributionForReport] = useState<any | null>(null)
+
+  async function handleViewEvidence(storagePath?: string | null) {
+    if (!storagePath) return
+    if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) {
+      window.open(storagePath, "_blank", "noopener,noreferrer")
+      return
+    }
+    const res = await getEvidenceSignedUrlAction({ storagePath })
+    if (res.success && res.data?.signedUrl) {
+      window.open(res.data.signedUrl, "_blank", "noopener,noreferrer")
+    } else {
+      alert("No se pudo obtener el acceso temporal a la evidencia.")
+    }
+  }
 
   async function aprobar(id: string) {
     try {
@@ -269,6 +297,17 @@ export function LedgerView({ data, propertyId }: { data: LedgerProps, propertyId
       })
       if (res.success) {
         setQuotes(prev => prev.filter(q => q.id !== quoteId))
+        if (res.data?.linkedContributionId) {
+          const newContrib: any = {
+            id: res.data.linkedContributionId,
+            monto: res.data.deficitAmount || 0,
+            moneda: "MXN",
+            motivo: `Fondeo para reparación aprobada: Cotización v${version}`,
+            estado: "REQUESTED",
+            solicitadoEn: new Date().toISOString(),
+          }
+          setContributions((prev: any[]) => [newContrib, ...prev])
+        }
         alert("¡Cotización aprobada formalmente!")
       } else {
         alert("Error: " + (res.error || "No se pudo aprobar la cotización"))
@@ -280,27 +319,8 @@ export function LedgerView({ data, propertyId }: { data: LedgerProps, propertyId
     }
   }
 
-  async function handleReportPayment(contribId: string) {
-    const ref = prompt("Ingresa la referencia o URL del comprobante de transferencia bancaria:")
-    if (!ref) return
-    setActionLoading(contribId)
-    try {
-      const res = await reportOwnerContributionAction({
-        contributionId: contribId,
-        evidenceUrl: ref.startsWith("http") ? ref : "https://custodia.app/evidence/" + ref,
-        notes: `Transferencia reportada: ${ref}`,
-      })
-      if (res.success) {
-        setContributions(prev => prev.map(c => c.id === contribId ? { ...c, estado: "REPORTED", reportadoEn: new Date().toISOString() } : c))
-        alert("Comprobante reportado. Pendiente de verificación por la administración PM.")
-      } else {
-        alert("Error: " + (res.error || "No se pudo reportar el pago"))
-      }
-    } catch (err: any) {
-      alert("Error: " + err.message)
-    } finally {
-      setActionLoading(null)
-    }
+  function handleReportPayment(contrib: any) {
+    setSelectedContributionForReport(contrib)
   }
 
   return (
@@ -421,30 +441,73 @@ export function LedgerView({ data, propertyId }: { data: LedgerProps, propertyId
                         {c.reportadoEn && ` · Comprobante enviado el ${new Date(c.reportadoEn).toLocaleDateString()}`}
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <span className="font-mono font-bold text-base text-foreground">
-                        ${c.monto.toLocaleString()} {c.moneda}
-                      </span>
-                      {c.estado === "REQUESTED" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={actionLoading === c.id}
-                          onClick={() => handleReportPayment(c.id)}
-                          className="rounded-lg h-8 text-xs font-semibold"
-                        >
-                          Adjuntar Comprobante
-                        </Button>
-                      )}
-                      {c.estado === "REPORTED" && (
-                        <span className="text-xs text-muted-foreground italic">Comprobante en revisión</span>
-                      )}
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span className="font-mono font-bold text-base text-foreground">
+                          ${c.monto.toLocaleString()} {c.moneda}
+                        </span>
+                        {c.estado === "REQUESTED" && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            disabled={actionLoading === c.id}
+                            onClick={() => handleReportPayment(c)}
+                            className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg h-8 text-xs font-semibold"
+                          >
+                            Reportar transferencia
+                          </Button>
+                        )}
+                        {c.estado === "REPORTED" && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium italic">
+                              Transferencia reportada. Pendiente de verificar recepción.
+                            </span>
+                            {c.comprobanteUrl && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleViewEvidence(c.comprobanteUrl)}
+                                className="h-7 text-[11px] rounded-lg"
+                              >
+                                Ver comprobante
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                        {c.estado === "VERIFIED" && c.comprobanteUrl && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleViewEvidence(c.comprobanteUrl)}
+                            className="h-7 text-[11px] text-muted-foreground hover:text-foreground"
+                          >
+                            Ver comprobante
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Modal accesible para reportar transferencia bancaria con comprobante privado */}
+            <TransferReportModal
+              isOpen={!!selectedContributionForReport}
+              onClose={() => setSelectedContributionForReport(null)}
+              contribution={selectedContributionForReport}
+              onSuccess={(data) => {
+                setContributions(prev => prev.map(c => 
+                  c.id === data.contributionId 
+                    ? { 
+                        ...c, 
+                        estado: "REPORTED", 
+                        reportadoEn: new Date().toISOString(),
+                        comprobanteUrl: data.discrepancy ? c.comprobanteUrl : (selectedContributionForReport?.comprobanteUrl || "uploaded")
+                      } 
+                    : c
+                ))
+              }}
+            />
 
           <Card>
             <CardHeader className="border-b">

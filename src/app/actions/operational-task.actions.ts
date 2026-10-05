@@ -21,11 +21,50 @@ const createTaskSchema = z.object({
   })).default([]),
   sourceType: z.enum(["MANUAL", "CHAT", "INSPECTION", "STAY", "RECURRENT"]).default("MANUAL"),
   sourceId: z.string().optional(),
+  assigneeId: z.string().uuid().optional(),
 })
 
 export async function createOperationalTaskAction(data: z.infer<typeof createTaskSchema>) {
   return safeAction(createTaskSchema, data, async (input, tenantId) => {
     return withTenantRLS(tenantId, async (tx) => {
+      // Evitar duplicados por doble click o reintento si viene de STAY o INSPECTION con la misma fuente y título
+      if (input.sourceId && (input.sourceType === "STAY" || input.sourceType === "INSPECTION")) {
+        const existing = await tx.operationalTask.findFirst({
+          where: {
+            tenantId,
+            propertyId: input.propertyId,
+            sourceType: input.sourceType,
+            sourceId: input.sourceId,
+            title: input.title,
+            status: { notIn: ["CANCELLED"] }
+          }
+        });
+        if (existing) {
+          // Si ya existe pero se proporcionó un nuevo assigneeId, actualizarlo
+          if (input.assigneeId && existing.assigneeId !== input.assigneeId) {
+            const updated = await tx.operationalTask.update({
+              where: { id: existing.id },
+              data: {
+                assigneeId: input.assigneeId,
+                status: existing.status === "PENDING" ? "ASSIGNED" : existing.status,
+              }
+            });
+            return {
+              taskId: updated.id,
+              title: updated.title,
+              status: updated.status,
+              alreadyExisted: true,
+            };
+          }
+          return {
+            taskId: existing.id,
+            title: existing.title,
+            status: existing.status,
+            alreadyExisted: true,
+          };
+        }
+      }
+
       const task = await tx.operationalTask.create({
         data: {
           tenantId,
@@ -33,7 +72,8 @@ export async function createOperationalTaskAction(data: z.infer<typeof createTas
           title: input.title,
           description: input.description,
           priority: input.priority,
-          status: "PENDING",
+          status: input.assigneeId ? "ASSIGNED" : "PENDING",
+          assigneeId: input.assigneeId || null,
           dueDate: input.dueDate ? new Date(input.dueDate) : null,
           checklistJson: input.checklist,
           sourceType: input.sourceType,
@@ -45,6 +85,7 @@ export async function createOperationalTaskAction(data: z.infer<typeof createTas
         taskId: task.id,
         title: task.title,
         status: task.status,
+        alreadyExisted: false,
       };
     });
   });

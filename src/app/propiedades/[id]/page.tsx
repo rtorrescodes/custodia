@@ -94,14 +94,28 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
           </div>
 
           <div className="flex flex-col gap-1">
-            <span className="text-[11px] font-medium text-muted-foreground">Disponible Operativo</span>
-            <span className="text-xs font-bold text-foreground">
-              ${(property.fondosFiduciarios?.disponibleNuevasObligaciones || 0).toLocaleString()} MXN
+            <span className="text-[11px] font-medium text-muted-foreground">Fondo de Reserva</span>
+            <span className="text-xs font-semibold text-foreground">
+              ${(property.fondosFiduciarios?.reservaConstituida || 0).toLocaleString()} / ${(property.fondosFiduciarios?.reservaMinima || 2000).toLocaleString()} MXN
             </span>
             <span className="text-[10px] text-muted-foreground truncate">
               {property.fondosFiduciarios?.reservaFaltante > 0
-                ? `Faltante reserva: $${property.fondosFiduciarios.reservaFaltante.toLocaleString()} MXN`
-                : `Reserva completa: $${(property.fondosFiduciarios?.reservaConstituida || 0).toLocaleString()} MXN`}
+                ? `Meta pendiente: $${property.fondosFiduciarios.reservaFaltante.toLocaleString()} (no exigible)`
+                : "Meta contractual completa"}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Disponible Operativo</span>
+            <span className={`text-xs font-bold ${
+              property.fondosFiduciarios?.disponibleNuevasObligaciones > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-foreground"
+            }`}>
+              ${(property.fondosFiduciarios?.disponibleNuevasObligaciones || 0).toLocaleString()} MXN
+            </span>
+            <span className="text-[10px] text-muted-foreground truncate">
+              {property.fondosFiduciarios?.disponibleNuevasObligaciones === 0
+                ? "Sin saldo libre para nuevas órdenes"
+                : "Libre para nuevas operaciones"}
             </span>
           </div>
 
