@@ -3,7 +3,7 @@
 import { z } from "zod"
 import { revalidatePath } from "next/cache"
 import { safeAction } from "@/lib/auth/action-wrapper"
-import { prisma } from "@/lib/prisma"
+import { prisma, withTenantRLS } from "@/lib/prisma"
 import { resolveMembershipContext, canAccessProperty } from "@/lib/auth/membership-guard"
 import { propertyService } from "@/lib/services/property-service"
 
@@ -210,3 +210,218 @@ export async function generateHandoffDossierAction(input: z.infer<typeof generat
     });
   });
 }
+
+// -------------------------------------------------------------
+// 3. CUS-09C: Generar Informe Operativo de Valor para el Propietario
+// -------------------------------------------------------------
+const generatePerformanceReportSchema = z.object({
+  propertyId: z.string().uuid(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  language: z.enum(["es", "en"]).default("es"),
+})
+
+export async function generateOwnerPerformanceReportAction(data: z.infer<typeof generatePerformanceReportSchema>) {
+  return safeAction(generatePerformanceReportSchema, data, async (input, tenantId, userId) => {
+    return withTenantRLS(tenantId, async (tx: any) => {
+      const property = await tx.property.findUnique({
+        where: { id: input.propertyId, tenantId },
+        include: {
+          owners: { include: { user: true } },
+          workOrders: {
+            where: {
+              updatedAt: { gte: new Date(input.periodStart), lte: new Date(input.periodEnd) },
+              status: "COMPLETED",
+            },
+            include: { quotes: true, evidences: true }
+          },
+          inspections: {
+            where: {
+              inspectionDate: { gte: new Date(input.periodStart), lte: new Date(input.periodEnd) },
+              status: "COMPLETED",
+            }
+          },
+          supplies: {
+            include: {
+              movements: {
+                where: {
+                  createdAt: { gte: new Date(input.periodStart), lte: new Date(input.periodEnd) }
+                }
+              }
+            }
+          },
+          contributions: {
+            where: {
+              createdAt: { gte: new Date(input.periodStart), lte: new Date(input.periodEnd) },
+              status: "VERIFIED"
+            }
+          }
+        }
+      });
+
+      if (!property) throw new Error("Property not found");
+
+      const { accountingService } = await import("@/lib/services/accounting-service");
+      const fiduciary = await accountingService.getPropertyFiduciarySummary(tenantId, property.id, tx);
+
+      // Desglose de valor operativo
+      const worksCompleted = property.workOrders.map((wo: any) => ({
+        titulo: wo.title,
+        categoria: wo.category,
+        costoFinal: Number(wo.actualCost || wo.estimatedCost || 0),
+        evidenciasCount: wo.evidences.length,
+      }));
+
+      const careVisitsCount = property.inspections.length;
+      const totalSpent = worksCompleted.reduce((sum: number, w: any) => sum + w.costoFinal, 0);
+      const totalContributed = property.contributions.reduce((sum: number, c: any) => sum + Number(c.amount), 0);
+
+      const reportTitle = input.language === "en"
+        ? `Executive Property Performance Report - ${property.name}`
+        : `Informe Ejecutivo de Operación y Valor del Inmueble - ${property.name}`;
+
+      return {
+        reportId: `REP-VAL-${property.id.slice(0, 8).toUpperCase()}-${Date.now()}`,
+        title: reportTitle,
+        language: input.language,
+        period: {
+          start: input.periodStart,
+          end: input.periodEnd,
+        },
+        property: {
+          id: property.id,
+          name: property.name,
+          address: property.address,
+          occupancyStatus: property.occupancyStatus,
+          lastCareVisitAt: property.lastCareVisitAt?.toISOString() || null,
+        },
+        metricasClave: {
+          trabajosMantenimientoRealizados: worksCompleted.length,
+          visitasCuidadoEfectuadas: careVisitsCount,
+          totalInversionMantenimiento: totalSpent,
+          totalAportacionesVerificadas: totalContributed,
+          saldoNetoEnCustodia: fiduciary.fondosNetosDueño,
+          reservaContractualPreservada: fiduciary.reservaMinimaContractual,
+        },
+        trabajosDetallados: worksCompleted,
+        insumosConsumidos: property.supplies.map((s: any) => ({
+          item: s.item,
+          unidad: s.unit,
+          consumosPeriodo: s.movements.filter((m: any) => m.type === "OUTFLOW").reduce((acc: number, m: any) => acc + m.quantity, 0),
+          stockActual: s.currentStock,
+        })),
+        generadoPor: userId,
+        generadoEn: new Date().toISOString(),
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 4. CUS-09C: Entrega Formal de Administración (Handoff Inmueble)
+// -------------------------------------------------------------
+const executeHandoffSchema = z.object({
+  propertyId: z.string().uuid(),
+  outgoingManagerId: z.string().uuid(),
+  incomingManagerId: z.string().uuid(),
+  reason: z.string().min(5),
+  rotationKeysRequired: z.array(z.string()).default([]), // IDs de secretos de bóveda que exigen rotación física
+  observations: z.string().min(5),
+})
+
+export async function executePropertyHandoffAction(data: z.infer<typeof executeHandoffSchema>) {
+  return safeAction(executeHandoffSchema, data, async (input, tenantId, userId) => {
+    return withTenantRLS(tenantId, async (tx: any) => {
+      const user = await tx.user.findUnique({ where: { id: userId } });
+      const isManager = user?.role === "MANAGER" || user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
+      if (!isManager) {
+        throw new Error("Solo los administradores pueden autorizar y ejecutar la entrega de administración.");
+      }
+
+      const property = await tx.property.findUnique({
+        where: { id: input.propertyId, tenantId },
+        include: {
+          vaults: true,
+          tasks: { where: { status: { in: ["PENDING", "IN_PROGRESS", "ASSIGNED"] } } }
+        }
+      });
+
+      if (!property) throw new Error("Property not found");
+
+      const now = new Date();
+
+      // 1. Reasignar primaryManagerId en Property
+      await tx.property.update({
+        where: { id: property.id },
+        data: {
+          primaryManagerId: input.incomingManagerId,
+        }
+      });
+
+      // 2. Reasignar tareas pendientes del administrador saliente al entrante
+      let reassignedTasksCount = 0;
+      for (const t of property.tasks) {
+        if (t.assigneeId === input.outgoingManagerId) {
+          await tx.operationalTask.update({
+            where: { id: t.id },
+            data: { assigneeId: input.incomingManagerId }
+          });
+          reassignedTasksCount++;
+        }
+      }
+
+      // 3. Marcar credenciales que exigen rotación obligatoria
+      const rotatedVaultIds: string[] = [];
+      for (const vaultId of input.rotationKeysRequired) {
+        const v = property.vaults.find((k: any) => k.id === vaultId);
+        if (v) {
+          await tx.propertyVault.update({
+            where: { id: v.id },
+            data: { isRotated: true, lastRotatedAt: now }
+          });
+          // Registrar auditoría de rotación
+          await tx.vaultAccessAudit.create({
+            data: {
+              tenantId,
+              vaultId: v.id,
+              userId,
+              action: "ROTATE",
+            }
+          });
+          rotatedVaultIds.push(v.id);
+        }
+      }
+
+      // 4. Crear acta formal de entrega en ContractDocument
+      const handoffActa = await tx.contractDocument.create({
+        data: {
+          tenantId,
+          leaseId: property.id, // o id de referencia
+          type: "OTHER",
+          title: `Acta de Entrega de Administración (Handoff) - ${property.name}`,
+          metadata: {
+            propertyId: property.id,
+            outgoingManagerId: input.outgoingManagerId,
+            incomingManagerId: input.incomingManagerId,
+            reason: input.reason,
+            observations: input.observations,
+            tasksReassigned: reassignedTasksCount,
+            keysRequiringRotation: rotatedVaultIds,
+            executedBy: userId,
+            executedAt: now.toISOString(),
+          }
+        }
+      });
+
+      return {
+        handoffDocumentId: handoffActa.id,
+        propertyId: property.id,
+        newPrimaryManagerId: input.incomingManagerId,
+        reassignedTasksCount,
+        keysRotatedCount: rotatedVaultIds.length,
+        status: "HANDOFF_EXECUTED",
+      };
+    });
+  });
+}
+

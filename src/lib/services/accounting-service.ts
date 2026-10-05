@@ -270,16 +270,32 @@ export const accountingService = {
     // 3. Depósitos en garantía en custodia (Pasivo excluido)
     const securityDepositsHeld = await this.getAccountBalance(tenantId, accounts.securityDepositsLiability, { propertyId }, db);
 
-    // 4. Compromisos operativos vigentes (Órdenes aprobadas o en curso no completadas)
+    // 4. Compromisos operativos vigentes (Órdenes aprobadas o en curso no completadas: estimado menos lo ya pagado)
     const committedOrders = await db.workOrder.findMany({
       where: {
         propertyId,
         tenantId,
         status: { in: ['AWAITING_APPROVAL', 'IN_PROGRESS'] }
       },
-      select: { estimatedCost: true }
+      select: { id: true, estimatedCost: true, actualCost: true }
     });
-    const committedAmount = committedOrders.reduce((sum: number, o: any) => sum + Number(o.estimatedCost || 0), 0);
+    // El compromiso real pendiente es estimatedCost menos lo pagado acumulado (actualCost)
+    const committedAmount = committedOrders.reduce((sum: number, o: any) => {
+      const est = Number(o.estimatedCost || 0);
+      const act = Number(o.actualCost || 0);
+      return sum + Math.max(0, est - act);
+    }, 0);
+
+    // 4B. Propuestas de liquidación activas (DRAFT o APPROVED) congeladas
+    const activeSettlements = await db.settlementProposal.findMany({
+      where: {
+        propertyId,
+        tenantId,
+        status: { in: ['DRAFT', 'APPROVED'] }
+      },
+      select: { netPayable: true }
+    });
+    const activeSettlementAmount = activeSettlements.reduce((sum: number, s: any) => sum + Number(s.netPayable || 0), 0);
 
     // 5. Acuerdo de gestión y reserva mínima contractual
     const agreement = await db.managementAgreement.findFirst({
@@ -295,9 +311,10 @@ export const accountingService = {
     // Saldo neto del propietario bajo custodia PM (restando pasivo de depósitos en garantía)
     const netOwnerEscrowFunds = Number(pmEscrowBalance) - Number(securityDepositsHeld);
 
-    // Disponible para nuevas obligaciones operativas: Saldo neto - Reserva - Compromisos
+    // Disponible para nuevas obligaciones operativas: Saldo neto - Reserva - Compromisos - Liquidaciones activas
     // NO se oculta el déficit con Math.max: Si es negativo, muestra el saldo deudor/déficit real
-    const availableForExpenses = netOwnerEscrowFunds - reserveMinimum - committedAmount;
+    const totalCommitted = committedAmount + activeSettlementAmount;
+    const availableForExpenses = netOwnerEscrowFunds - reserveMinimum - totalCommitted;
 
     return {
       custodiaPmEfectiva: Number(pmEscrowBalance),
@@ -306,6 +323,8 @@ export const accountingService = {
       fondosNetosDueño: netOwnerEscrowFunds,
       reservaMinimaContractual: reserveMinimum,
       compromisosVigentes: committedAmount,
+      liquidacionesActivas: activeSettlementAmount,
+      compromisosTotales: totalCommitted,
       disponibleNuevasObligaciones: availableForExpenses,
       esDeficitario: availableForExpenses < 0,
       politicaGastoPM: {

@@ -1,38 +1,54 @@
-# Custodia Handoff — CUS-09: Operación Completa del Inmueble y Control de Cartera
+# Custodia Handoff — CUS-09C: Entrega Demostrable de Operación Diaria
 
 ## 1. Objetivo y Alcance
-Implementación integral de **CUS-09 — Operación Completa del Inmueble y Control de Cartera**:
-- Núcleo unificado para los tres escenarios residenciales:
-  1. Vivienda con arrendamiento residencial activo.
-  2. Casa de propietario ausente bajo cuidado y custodia de un PM.
-  3. Propiedad vacante en conservación preventiva y preparación para siguiente ocupante.
-- Correcciones mandatorias de seguridad y fidelidad:
-  - **A1. Fideicomiso real**: Eliminación de la equivalencia entre reserva mínima y autorización de gasto. Separación estricta de saldo, reserva, fondos comprometidos y fondos disponibles, con facultad máxima de gasto del PM (`pmExpenseLimit`) y flujo de aportaciones del dueño.
-  - **A2. Traducción honesta**: Eliminación de sustituciones y mocks parciales. Si no hay proveedor real configurado, preserva el original íntegro y declara `status: "NOT_AVAILABLE"`.
-  - **A3. Bóveda Zero-Trust**: Secretos enmascarados por defecto (`••••••••`). Revelado auditado en servidor (`revealVaultSecretAction`) con inserción inmutable en `VaultAccessAudit` sin registrar el valor sensible.
-- Bandeja de atención de cartera (`/cartera`) para gestión de alertas, tareas vencidas, decisiones de propietarios y visitas de cuidado.
+Cierre definitivo e implementación de la suite de operación diaria demostrable (**CUS-09C**), construida sobre la base comprobada de `feature/cus-09c-daily-operations`:
 
-## 2. Estado Actual y Componentes Conectados
-- **Migración de Base de Datos**: Aplicada a Supabase dev vía conexión directa puerto 5432.
-  - Modelos aditivos: `OperationalTask`, `OwnerContribution`, `SupplyInventory`, `VaultAccessAudit`.
-  - Campos aditivos: `Property.occupancyStatus`, `Property.careVisitIntervalDays`, `ManagementAgreement.pmExpenseLimit`.
-- **Rutas y Vistas Operativas**:
-  - `/cartera`: Bandeja centralizada de pendientes y alertas operativas de toda la cartera.
-  - `/propiedades/[id]`: Cabecera operacional en tiempo real (ocupación, responsable, próxima llegada, decisiones pendientes, disponible fiduciario y bloqueos) y pestañas operativas (Gastos con partidas y umbrales, Llegadas con checklist de preparación, Bóveda con botón de revelado auditado, Chat con IA y conversión humana a tareas, y Acuerdo fiduciario).
-  - `/portal`: Portal del propietario con transparencia fiduciaria y estados de cuenta.
-- **Herramientas de Gobierno**:
-  - Graft sincronizado en `tools/graft` (532 nodos, 1136 edges, 121 cards).
-  - Trivy escaneado: Cero vulnerabilidades críticas o altas en código de aplicación (solo alertas de dependencias de prueba en herramientas auxiliares y tokens de Supabase locales en `.env`).
-  - Suite de pruebas de aceptación: 11 de 11 tests físicos en `tests/cus09-acceptance.test.ts` pasando exitosamente.
+1. **Separación de Aprobación vs. Financiamiento**:
+   - El propietario puede aprobar formalmente cotizaciones aun cuando no existan fondos suficientes en custodia.
+   - El sistema transiciona la cotización a `APPROVED`, marca la orden de trabajo como `"Aprobada, pendiente de fondos"` y deriva automáticamente la solicitud de aportación (`OwnerContribution`) sin bloquear la soberanía del propietario.
+2. **Efecto Financiero Completo en Pagos (`recordVendorPaymentAction`)**:
+   - Liquidación a proveedores con soporte para pagos parciales (anticipos) y finiquitos.
+   - Consumo del propio compromiso de la orden sin doble deducción de saldo disponible ni falsos bloqueos.
+   - Respeto a modalidades de custodia (`PM_ESCROW` vs `DIRECT_OWNER`) y no mezcla de monedas.
+3. **Recorrido Completo de Tareas y Personal Operativo**:
+   - Máquina de estados completa para operarios/staff (`ASSIGNED` -> `IN_PROGRESS` -> `BLOCKED` con motivo obligatorio -> `VERIFICATION_PENDING` con evidencias -> `COMPLETED` o devolución con observaciones por el PM).
+   - Aislamiento Zero-Trust: El personal asignado solo recibe la información operativa necesaria sin exponer secretos maestros de la bóveda.
+4. **Llegadas Preparadas y Casa Desocupada**:
+   - Checklist de preparación estricto; estado "Lista" solo se deriva cuando todos los ítems obligatorios están satisfechos.
+   - Cancelación de estadías con anulación de pases y reversión.
+   - `Property.lastCareVisitAt` se actualiza **únicamente** cuando una visita preventiva de cuidado se completa y verifica de forma efectiva.
+5. **Ciclo de Contrato y Obligaciones Recurrentes**:
+   - Renovación versionada de contratos de arrendamiento (`renewLeaseAction`).
+   - Salida (move-out) con inspección y liquidación humana de depósito en garantía (`processMoveOutWithDepositReviewAction`).
+   - Generación periódica idempotente de tareas para obligaciones recurrentes (`executeRecurringObligationAction`).
+6. **Informe de Valor y Deduplicación Persistente de Traducciones**:
+   - Generación de informe operativo de valor bilingüe para el propietario (`generateOwnerPerformanceReportAction`), diferenciado del estado de cuenta.
+   - Deduplicación atómica persistente en base de datos (`TranslationRecord`) con hash SHA256 (`sourceHash`).
+7. **Entrega Formal de Administración (Handoff)**:
+   - `executePropertyHandoffAction`: Reasignación del administrador principal, transferencia de tareas operativas pendientes, marcado obligatorio de rotación física de credenciales y generación de acta formal.
 
-## 3. Pruebas y Comprobación
-- Compilación Turbopack: `npm run build` exitoso con 0 errores de TypeScript y 17 rutas optimizadas.
-- Pruebas CUS-01: 10 de 10 aprobadas.
-- Pruebas CUS-09: 11 de 11 aprobadas.
+## 2. Estado de Base de Datos y Persistencia
+- **Modelo Aditivo Sincronizado**: `TranslationRecord` con `@unique([sourceHash])` en Supabase de desarrollo.
+- **Cliente Prisma**: Regenerado exitosamente vía `npx prisma generate`.
+
+## 3. Pruebas y Comprobación Física
+- **Compilación Limpia**: `npm run build` ejecutado en Next.js Turbopack: 17 rutas analizadas, 0 errores de TypeScript y 0 advertencias bloqueantes.
+- **Suite CUS-09C (`tests/cus09c-acceptance.test.ts`)**: 7 de 7 recorridos demostrables aprobados:
+  - `R1`: Aprobación sin fondos y derivación de aportación.
+  - `R2`: Pago parcial y consumo de compromisos sin doble descuento.
+  - `R3`: Ciclo de vida completo del personal operativo con bloqueo obligatorio y verificación.
+  - `R4`: Llegadas de dueño con checklist e inspección preventiva condicional.
+  - `R5`: Renovación versionada, move-out con liquidación humana de depósito y obligaciones periódicas idempotentes.
+  - `R6`: Informe de valor y deduplicación persistente SHA256.
+  - `R7`: Entrega de administración con rotación obligatoria de credenciales.
+- **Suites de No Regresión**:
+  - `tests/cus09b-acceptance.test.ts`: 6 de 6 pruebas aprobadas.
+  - `tests/cus09-acceptance.test.ts`: 11 de 11 pruebas aprobadas.
 
 ## 4. Instrucciones para Revisión en Local
 1. Servidor activo en `http://localhost:3000`.
-2. Revisar la bandeja central de cartera en `http://localhost:3000/cartera`.
-3. Revisar el centro de mando del inmueble en `http://localhost:3000/propiedades/[id]` (ej. cualquier propiedad del listado).
-4. Comprobar el revelado de secretos en Bóveda (click en 👁️ registra auditoría y muestra el código).
-5. Comprobar la creación de tarea desde chat con confirmación explícita.
+2. Probar la aprobación soberana del dueño en `/portal` o `/propiedades/[id]` con fondos insuficientes.
+3. Verificar el resumen de valor y expediente de entrega en `/propiedades/[id]`.
+4. Ejecutar la suite integral de verificación:
+   `npx tsx tests/cus09c-acceptance.test.ts`
+

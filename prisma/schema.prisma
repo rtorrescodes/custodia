@@ -1278,6 +1278,25 @@ model SupplyMovement {
   @@index([supplyId, createdAt])
 }
 
+// ---------------------------------------------------------
+// CUS-09C: Persistencia y Deduplicación de Traducciones Honest
+// ---------------------------------------------------------
+model TranslationRecord {
+  id            String   @id @default(uuid())
+  sourceHash    String   // SHA256(sourceLang:targetLang:text) para deduplicación atómica
+  sourceLang    String   // es, en
+  targetLang    String   // es, en
+  originalText  String
+  translatedText String
+  status        String   // TRANSLATED_AI, NOT_AVAILABLE, ERROR
+  provider      String   // deepseek-chat, none
+  isAiGenerated Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@unique([sourceHash])
+  @@index([sourceLang, targetLang])
+}
+
 
 
 

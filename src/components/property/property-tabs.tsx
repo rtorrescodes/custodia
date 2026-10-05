@@ -162,7 +162,7 @@ export function PropertyTabs({
         if (o.id === orderId) {
           return {
             ...o,
-            estado: res.data?.isBlockedFunds ? "AWAITING_APPROVAL" : "IN_PROGRESS",
+            estado: res.data?.readyToStart ? "IN_PROGRESS" : "AWAITING_APPROVAL",
             cotizaciones: o.cotizaciones.map((q: any) => q.id === quoteId ? { ...q, estado: "APPROVED" } : q)
           };
         }

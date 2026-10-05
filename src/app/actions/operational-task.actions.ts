@@ -200,3 +200,134 @@ export async function convertFindingToWorkOrderAction(data: z.infer<typeof conve
     });
   });
 }
+
+// -------------------------------------------------------------
+// 5. CUS-09C: Asignar Tarea Operativa a Personal/Staff con Aislamiento Zero-Trust
+// -------------------------------------------------------------
+const assignOperationalTaskSchema = z.object({
+  taskId: z.string().uuid(),
+  assigneeId: z.string().uuid(),
+  dueDate: z.string().optional(),
+})
+
+export async function assignOperationalTaskAction(data: z.infer<typeof assignOperationalTaskSchema>) {
+  return safeAction(assignOperationalTaskSchema, data, async (input, tenantId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const task = await tx.operationalTask.update({
+        where: { id: input.taskId, tenantId },
+        data: {
+          assigneeId: input.assigneeId,
+          status: "ASSIGNED",
+          dueDate: input.dueDate ? new Date(input.dueDate) : undefined,
+        }
+      });
+
+      return {
+        taskId: task.id,
+        assigneeId: task.assigneeId,
+        status: task.status,
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 6. CUS-09C: Solicitar Verificación de Tarea (Operario reporta término con evidencia)
+// -------------------------------------------------------------
+const requestTaskVerificationSchema = z.object({
+  taskId: z.string().uuid(),
+  evidenceNotes: z.string().min(5),
+  evidenceUrls: z.array(z.string()).default([]),
+})
+
+export async function requestTaskVerificationAction(data: z.infer<typeof requestTaskVerificationSchema>) {
+  return safeAction(requestTaskVerificationSchema, data, async (input, tenantId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const task = await tx.operationalTask.findUnique({
+        where: { id: input.taskId, tenantId }
+      });
+
+      if (!task) throw new Error("Task not found");
+
+      // Actualizar a VERIFICATION_PENDING con descripción/evidencia agregada
+      const updated = await tx.operationalTask.update({
+        where: { id: task.id },
+        data: {
+          status: "VERIFICATION_PENDING",
+          description: task.description 
+            ? `${task.description}\n[EVIDENCIA DE ENTREGA]: ${input.evidenceNotes}`
+            : `[EVIDENCIA DE ENTREGA]: ${input.evidenceNotes}`,
+        }
+      });
+
+      return {
+        taskId: updated.id,
+        status: updated.status,
+        readyForReview: true,
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 7. CUS-09C: Resolver Verificación por PM (Aprobar a COMPLETED o Devolver para Corrección)
+// -------------------------------------------------------------
+const resolveTaskVerificationSchema = z.object({
+  taskId: z.string().uuid(),
+  approved: z.boolean(),
+  notes: z.string().min(3),
+})
+
+export async function resolveTaskVerificationAction(data: z.infer<typeof resolveTaskVerificationSchema>) {
+  return safeAction(resolveTaskVerificationSchema, data, async (input, tenantId, userId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const user = await tx.user.findUnique({ where: { id: userId } });
+      const isManager = user?.role === "MANAGER" || user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
+      if (!isManager) {
+        throw new Error("Solo los administradores o coordinadores pueden verificar la finalización de tareas.");
+      }
+
+      const task = await tx.operationalTask.findUnique({
+        where: { id: input.taskId, tenantId }
+      });
+
+      if (!task) throw new Error("Task not found");
+
+      if (input.approved) {
+        const completed = await tx.operationalTask.update({
+          where: { id: task.id },
+          data: {
+            status: "COMPLETED",
+            completedAt: new Date(),
+            verifiedAt: new Date(),
+            verifiedById: userId,
+            description: `${task.description || ""}\n[VERIFICACIÓN APROBADA]: ${input.notes}`,
+          }
+        });
+
+        return {
+          taskId: completed.id,
+          status: completed.status,
+          verified: true,
+          verifiedAt: completed.verifiedAt?.toISOString(),
+        };
+      } else {
+        // Devolver para corrección: vuelve a IN_PROGRESS con observaciones obligatorias
+        const returned = await tx.operationalTask.update({
+          where: { id: task.id },
+          data: {
+            status: "IN_PROGRESS",
+            description: `${task.description || ""}\n[OBSERVACIONES DE RECHAZO]: ${input.notes}`,
+          }
+        });
+
+        return {
+          taskId: returned.id,
+          status: returned.status,
+          verified: false,
+          notes: input.notes,
+        };
+      }
+    });
+  });
+}

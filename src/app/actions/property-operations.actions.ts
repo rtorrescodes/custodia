@@ -129,7 +129,7 @@ export async function approveQuoteAction(data: z.infer<typeof approveQuoteSchema
       const availableFunds = fiduciarySummary.disponibleNuevasObligaciones;
       const hasSufficientFunds = availableFunds >= totalCost;
 
-      // Actualizar cotización a APPROVED
+      // 1. Decisión soberana del propietario: Aprobar formalmente la versión y el importe de la cotización
       const updatedQuote = await tx.workOrderQuote.update({
         where: { id: input.quoteId },
         data: {
@@ -140,7 +140,12 @@ export async function approveQuoteAction(data: z.infer<typeof approveQuoteSchema
         }
       });
 
-      // Si no hay fondos, la orden pasa a AWAITING_APPROVAL (bloqueada por fondos) y requiere aportación
+      // 2. Comprobación fiduciaria separada de la decisión: ¿Hay fondos para autorizar inicio o requiere aportación?
+      const deficitAmount = hasSufficientFunds ? 0 : (totalCost - Math.max(0, availableFunds));
+
+      // 3. Estado de la orden de trabajo:
+      // Si tiene fondos -> IN_PROGRESS (autorizada para iniciar ejecución)
+      // Si no tiene fondos -> AWAITING_APPROVAL con descripción clara ("Aprobada por dueño; pendiente de fondos")
       const newWOStatus = hasSufficientFunds ? "IN_PROGRESS" : "AWAITING_APPROVAL";
 
       await tx.workOrder.update({
@@ -151,6 +156,37 @@ export async function approveQuoteAction(data: z.infer<typeof approveQuoteSchema
         }
       });
 
+      // 4. Si faltan fondos, generar automáticamente solicitud de aportación ligada si no existe una pendiente
+      let linkedContributionId: string | null = null;
+      if (!hasSufficientFunds && deficitAmount > 0) {
+        const existingContrib = await tx.ownerContribution.findFirst({
+          where: {
+            tenantId,
+            propertyId: quote.workOrder.propertyId,
+            status: { in: ["REQUESTED", "REPORTED"] },
+            reason: { contains: quote.workOrder.title },
+          }
+        });
+
+        if (!existingContrib) {
+          const newContrib = await tx.ownerContribution.create({
+            data: {
+              tenantId,
+              propertyId: quote.workOrder.propertyId,
+              ownerId: userId,
+              amount: deficitAmount,
+              currency: quote.currency || "MXN",
+              destinationAccount: "PM_ESCROW",
+              reason: `Fondeo para reparación aprobada: ${quote.workOrder.title} (Cotización v${quote.version})`,
+              status: "REQUESTED",
+            }
+          });
+          linkedContributionId = newContrib.id;
+        } else {
+          linkedContributionId = existingContrib.id;
+        }
+      }
+
       return {
         approved: true,
         quoteId: updatedQuote.id,
@@ -158,7 +194,10 @@ export async function approveQuoteAction(data: z.infer<typeof approveQuoteSchema
         hasSufficientFunds,
         availableFunds,
         requiredFunds: totalCost,
-        isBlockedFunds: !hasSufficientFunds,
+        deficitAmount,
+        statusLabel: hasSufficientFunds ? "Aprobada y autorizada para iniciar" : "Aprobada, pendiente de fondos",
+        linkedContributionId,
+        readyToStart: hasSufficientFunds,
       };
     });
   });
@@ -443,6 +482,7 @@ const recordVendorPaymentSchema = z.object({
   workOrderId: z.string().uuid(),
   quoteId: z.string().uuid().optional(),
   amount: z.number().positive(),
+  isFinalPayment: z.boolean().default(false),
   paymentMethod: z.enum(["TRANSFER", "CASH", "CARD"]).default("TRANSFER"),
   reference: z.string().min(3),
   notes: z.string().optional(),
@@ -458,10 +498,27 @@ export async function recordVendorPaymentAction(data: z.infer<typeof recordVendo
 
       if (!wo) throw new Error("Work order not found");
 
+      // Validar modalidad: Si la custodia es DIRECT_OWNER o LANDLORD, el PM no dispersa de su cuenta
+      if (wo.property.fundCustodian === "DIRECT_OWNER") {
+        throw new Error("Modalidad DIRECT_OWNER: Los pagos son realizados directamente por el propietario desde sus cuentas bancarias.");
+      }
+
       // Comprobar disponibilidad de fondos en custodia PM para liquidar
       const fiduciary = await accountingService.getPropertyFiduciarySummary(tenantId, wo.propertyId, tx);
       if (fiduciary.custodiaPmEfectiva < input.amount) {
         throw new Error(`Fondos insuficientes en custodia PM para emitir pago (${fiduciary.custodiaPmEfectiva} < ${input.amount}). Requiere aportación previa.`);
+      }
+
+      // Regla CUS-09C: No rechazar por descontar primero el compromiso y luego exigir nuevamente el mismo disponible.
+      // El pago consume el compromiso de la orden; el disponible de la propiedad después de considerar este compromiso
+      // propio es: disponibleNuevasObligaciones + compromisoPropioDeEstaOrden.
+      const previousPaid = Number(wo.actualCost || 0);
+      const estimated = Number(wo.estimatedCost || 0);
+      const remainingCommitmentForThisOrder = Math.max(0, estimated - previousPaid);
+      const effectiveAvailableForThisWO = fiduciary.disponibleNuevasObligaciones + remainingCommitmentForThisOrder;
+
+      if (effectiveAvailableForThisWO < input.amount) {
+        throw new Error(`Fondos insuficientes netos para liquidar la orden de trabajo (Disponible neto considerando compromiso: $${effectiveAvailableForThisWO.toFixed(2)} MXN, Requerido: $${input.amount.toFixed(2)} MXN).`);
       }
 
       const now = new Date();
@@ -472,7 +529,7 @@ export async function recordVendorPaymentAction(data: z.infer<typeof recordVendo
         tenantId,
         idempotencyKey: `vendor-pay-wo-${wo.id}-${input.reference}`,
         effectiveDate: now,
-        description: `Pago a proveedor por orden de trabajo ${wo.title}: Ref ${input.reference}`,
+        description: `Pago a proveedor por orden de trabajo ${wo.title}: Ref ${input.reference}${input.isFinalPayment ? " (Finiquito)" : " (Anticipo/Parcial)"}`,
         createdById: userId,
         lines: [
           {
@@ -506,18 +563,25 @@ export async function recordVendorPaymentAction(data: z.infer<typeof recordVendo
         }
       });
 
-      // 3. Actualizar orden
+      // 3. Actualizar orden: Acumular costo pagado y determinar status (COMPLETED si es final o cubre total)
+      const newAccumulatedCost = previousPaid + input.amount;
+      const isCompleted = input.isFinalPayment || newAccumulatedCost >= estimated;
+      const newStatus = isCompleted ? "COMPLETED" : "IN_PROGRESS";
+
       await tx.workOrder.update({
         where: { id: wo.id },
         data: {
-          actualCost: input.amount,
-          status: "COMPLETED",
+          actualCost: newAccumulatedCost,
+          status: newStatus,
         }
       });
 
       return {
         workOrderId: wo.id,
         paidAmount: input.amount,
+        totalPaidSoFar: newAccumulatedCost,
+        isCompleted,
+        status: newStatus,
         journalEntryId: entry.id,
         reference: input.reference,
         paidToVendor: true,
@@ -578,10 +642,115 @@ export async function scheduleStayAction(data: z.infer<typeof scheduleStayWithCo
         }
       });
 
+      // Simulación de pase de acceso Alddea (sin pases reales en prod)
+      let alddeaPassPrepared = false;
+      if (input.stayType === "MOVE_IN") {
+        alddeaPassPrepared = true;
+      }
+
       return {
         inspectionId: inspection.id,
         isReady,
         conflictDetected: false,
+        alddeaPassPrepared,
+        statusLabel: isReady ? "Lista para llegada" : "En preparación (Checklist pendiente)",
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 8B. Cancelar Estadía Programada y Revocar Acceso
+// -------------------------------------------------------------
+const cancelStaySchema = z.object({
+  inspectionId: z.string().uuid(),
+  reason: z.string().min(3),
+})
+
+export async function cancelStayAction(data: z.infer<typeof cancelStaySchema>) {
+  return safeAction(cancelStaySchema, data, async (input, tenantId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const inspection = await tx.inspection.findUnique({
+        where: { id: input.inspectionId, tenantId }
+      });
+
+      if (!inspection) throw new Error("Stay inspection record not found");
+
+      const updated = await tx.inspection.update({
+        where: { id: input.inspectionId },
+        data: {
+          status: "DISPUTED", // Representa cancelado/anulado en el enum InspectionStatus
+          summaryNotes: `${inspection.summaryNotes || ""}\n[CANCELADA]: ${input.reason}`,
+        }
+      });
+
+      return {
+        inspectionId: updated.id,
+        cancelled: true,
+        reason: input.reason,
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 8C. Completar y Verificar Visita de Cuidado Preventivo (Actualiza lastCareVisitAt ÚNICAMENTE aquí)
+// -------------------------------------------------------------
+const completeCareInspectionSchema = z.object({
+  inspectionId: z.string().uuid(),
+  findings: z.array(z.string()).default([]),
+  notes: z.string().min(3),
+})
+
+export async function completeCareInspectionAction(data: z.infer<typeof completeCareInspectionSchema>) {
+  return safeAction(completeCareInspectionSchema, data, async (input, tenantId, userId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const inspection = await tx.inspection.findUnique({
+        where: { id: input.inspectionId, tenantId },
+        include: { property: true }
+      });
+
+      if (!inspection) throw new Error("Care inspection not found");
+
+      // Regla CUS-09C: Comprobar que no haya conflicto con contrato de arrendamiento residencial activo
+      const activeLease = await tx.lease.findFirst({
+        where: {
+          propertyId: inspection.propertyId,
+          tenantId,
+          status: "ACTIVE",
+        }
+      });
+
+      if (activeLease) {
+        throw new Error("Conflicto de ocupación: El inmueble tiene un arrendamiento activo. Las visitas de cuidado en inmuebles desocupados están suspendidas.");
+      }
+
+      const now = new Date();
+
+      // Actualizar la inspección a COMPLETED
+      const updatedInspection = await tx.inspection.update({
+        where: { id: inspection.id },
+        data: {
+          status: "COMPLETED",
+          inspectionDate: now,
+          summaryNotes: `${inspection.summaryNotes || ""}\n[COMPLETADA]: ${input.notes}\n[HALLAZGOS]: ${input.findings.join("; ")}`,
+        }
+      });
+
+      // Regla CUS-09C: lastCareVisitAt se actualiza ÚNICAMENTE cuando la visita preventiva se completa de forma efectiva
+      await tx.property.update({
+        where: { id: inspection.propertyId },
+        data: {
+          lastCareVisitAt: now,
+        }
+      });
+
+      return {
+        inspectionId: updatedInspection.id,
+        propertyId: inspection.propertyId,
+        completedAt: now.toISOString(),
+        lastCareVisitUpdated: true,
+        findingsRecorded: input.findings.length,
       };
     });
   });
