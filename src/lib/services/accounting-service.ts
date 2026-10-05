@@ -84,7 +84,7 @@ export const accountingService = {
    * Registra un asiento contable de forma atómica.
    * Valida estrictamente que la suma de débitos sea idéntica a la suma de créditos.
    */
-  async postEntry(input: CreateJournalEntryInput) {
+  async postEntry(input: CreateJournalEntryInput, client?: any) {
     if (!input.lines || input.lines.length < 2) {
       throw new Error("Un asiento contable requiere al menos 2 líneas de movimiento.");
     }
@@ -110,7 +110,7 @@ export const accountingService = {
     }
 
     // Ejecución atómica en base de datos
-    return prisma.$transaction(async (tx) => {
+    const run = async (tx: any) => {
       // Verificar si ya existe por idempotencia
       const existing = await tx.journalEntry.findUnique({
         where: {
@@ -150,7 +150,12 @@ export const accountingService = {
       });
 
       return entry;
-    });
+    };
+
+    if (client) {
+      return run(client);
+    }
+    return prisma.$transaction(run);
   },
 
   /**
@@ -214,9 +219,11 @@ export const accountingService = {
   async getAccountBalance(
     tenantId: string,
     accountId: string,
-    dimensionFilter?: { propertyId?: string; ownerId?: string; leaseId?: string }
+    dimensionFilter?: { propertyId?: string; ownerId?: string; leaseId?: string },
+    client?: any
   ) {
-    const lines = await prisma.journalLine.findMany({
+    const db = client || prisma;
+    const lines = await db.journalLine.findMany({
       where: {
         accountId,
         entry: { tenantId, status: 'POSTED' },
@@ -239,5 +246,76 @@ export const accountingService = {
     }
 
     return balance;
+  },
+
+  /**
+   * CUS-09B: Resumen Fiduciario de la Propiedad (Unificación con Motor Contable)
+   * Reutiliza el ledger de partida doble y las tablas operativas para calcular:
+   * 1. Fondos efectivamente recibidos bajo custodia (PM_ESCROW)
+   * 2. Fondos bajo cobranza directa del propietario (DIRECT_OWNER)
+   * 3. Depósitos en garantía en custodia (Pasivo no disponible para gasto operativo)
+   * 4. Saldo a favor o en contra del propietario (neto contable)
+   * 5. Compromisos operativos vigentes (WorkOrders aprobadas/en curso pendientes de pago)
+   * 6. Reserva mínima contractual obligatoria
+   * 7. Disponible real para nuevas obligaciones (mostrando déficit negativo si existe)
+   */
+  async getPropertyFiduciarySummary(tenantId: string, propertyId: string, client?: any) {
+    const db = client || prisma;
+    const accounts = await this.ensureStandardChartOfAccounts(tenantId, db);
+
+    // 1. Fondos en Caja PM Escrow para esta propiedad
+    const pmEscrowBalance = await this.getAccountBalance(tenantId, accounts.cashPmEscrow, { propertyId }, db);
+    // 2. Fondos informativos en cuenta directa del dueño
+    const directOwnerBalance = await this.getAccountBalance(tenantId, accounts.cashDirectOwner, { propertyId }, db);
+    // 3. Depósitos en garantía en custodia (Pasivo excluido)
+    const securityDepositsHeld = await this.getAccountBalance(tenantId, accounts.securityDepositsLiability, { propertyId }, db);
+
+    // 4. Compromisos operativos vigentes (Órdenes aprobadas o en curso no completadas)
+    const committedOrders = await db.workOrder.findMany({
+      where: {
+        propertyId,
+        tenantId,
+        status: { in: ['AWAITING_APPROVAL', 'IN_PROGRESS'] }
+      },
+      select: { estimatedCost: true }
+    });
+    const committedAmount = committedOrders.reduce((sum: number, o: any) => sum + Number(o.estimatedCost || 0), 0);
+
+    // 5. Acuerdo de gestión y reserva mínima contractual
+    const agreement = await db.managementAgreement.findFirst({
+      where: { tenantId, propertyId },
+      orderBy: { effectiveFrom: 'desc' }
+    });
+
+    const reserveMinimum = agreement?.reserveMinimum ? Number(agreement.reserveMinimum) : 0;
+    const pmExpenseLimit = agreement?.pmExpenseLimit !== null && agreement?.pmExpenseLimit !== undefined
+      ? Number(agreement.pmExpenseLimit)
+      : null; // null = Sin configurar formalmente
+
+    // Saldo neto del propietario bajo custodia PM (restando pasivo de depósitos en garantía)
+    const netOwnerEscrowFunds = Number(pmEscrowBalance) - Number(securityDepositsHeld);
+
+    // Disponible para nuevas obligaciones operativas: Saldo neto - Reserva - Compromisos
+    // NO se oculta el déficit con Math.max: Si es negativo, muestra el saldo deudor/déficit real
+    const availableForExpenses = netOwnerEscrowFunds - reserveMinimum - committedAmount;
+
+    return {
+      custodiaPmEfectiva: Number(pmEscrowBalance),
+      cobranzaDirectaDueño: Number(directOwnerBalance),
+      depositosGarantiaRetenidos: Number(securityDepositsHeld),
+      fondosNetosDueño: netOwnerEscrowFunds,
+      reservaMinimaContractual: reserveMinimum,
+      compromisosVigentes: committedAmount,
+      disponibleNuevasObligaciones: availableForExpenses,
+      esDeficitario: availableForExpenses < 0,
+      politicaGastoPM: {
+        limiteAutorizado: pmExpenseLimit,
+        estaConfigurado: pmExpenseLimit !== null,
+        moneda: agreement?.pmExpenseCurrency || "MXN",
+        categoriasAutoAprobadas: agreement?.autoApproveCategories || [],
+        reglaEmergencia: agreement?.emergencyRule || null,
+        configuradoEn: agreement?.configuredAt ? agreement.configuredAt.toISOString() : null,
+      }
+    };
   }
 };

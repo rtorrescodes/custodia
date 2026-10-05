@@ -4,6 +4,7 @@ import { safeAction } from "@/lib/auth/action-wrapper"
 import { withTenantRLS } from "@/lib/prisma"
 import { z } from "zod"
 import { translateText } from "@/lib/services/translation.service"
+import { accountingService } from "@/lib/services/accounting-service"
 
 // -------------------------------------------------------------
 // 1. Reportar Gasto / Reparación con Validación Fiduciaria Real (A1)
@@ -22,54 +23,28 @@ const createExpenseSchema = z.object({
 export async function createExpenseAction(data: z.infer<typeof createExpenseSchema>) {
   return safeAction(createExpenseSchema, data, async (input, tenantId, userId) => {
     return withTenantRLS(tenantId, async (tx) => {
-      // 1. Obtener acuerdo de administración y límite de gasto del PM
-      const agreement = await tx.managementAgreement.findFirst({
-        where: {
-          tenantId,
-          propertyId: input.propertyId,
-        },
-        orderBy: { effectiveFrom: "desc" }
-      });
+      // 1. Obtener resumen fiduciario real y política del acuerdo de administración
+      const fiduciarySummary = await accountingService.getPropertyFiduciarySummary(tenantId, input.propertyId, tx);
+      const policy = fiduciarySummary.politicaGastoPM;
 
-      // Límite de gasto autónomo del PM (por defecto $1,000 MXN si no está especificado)
-      const pmExpenseLimit = agreement?.pmExpenseLimit ? Number(agreement.pmExpenseLimit) : 1000;
-      const autoApproveCats = agreement?.autoApproveCategories || [];
+      // CUS-09B Corrección 1: Si no está configurado (null), NO inventar $1,000 MXN. Requiere aprobación obligatoria.
+      const isConfigured = policy.estaConfigurado;
+      const pmExpenseLimit = policy.limiteAutorizado; // number | null
+      const autoApproveCats = policy.categoriasAutoAprobadas || [];
       const isAutoCategory = autoApproveCats.includes(input.category);
 
       const total = input.laborCost + input.materialCost > 0 
         ? input.laborCost + input.materialCost 
         : input.estimatedCost;
 
-      // El gasto requiere aprobación si excede la facultad del PM y no es categoría exenta
-      const requiresOwnerApproval = total > pmExpenseLimit && !isAutoCategory;
+      // Regla de autorización: Si no está configurado, o excede el límite y no es categoría exenta, requiere aprobación
+      const requiresOwnerApproval = !isConfigured || (pmExpenseLimit !== null && total > pmExpenseLimit && !isAutoCategory);
 
-      // 2. Calcular fondos reales disponibles en el fideicomiso/cuenta del propietario
-      const charges = await tx.charge.findMany({
-        where: { propertyId: input.propertyId, status: "PAID" },
-        select: { amount: true }
-      });
-      const grossIncome = charges.reduce((acc, c) => acc + Number(c.amount), 0);
-
-      const paidOrders = await tx.workOrder.findMany({
-        where: { propertyId: input.propertyId, status: "COMPLETED" },
-        select: { actualCost: true }
-      });
-      const totalPaidExpenses = paidOrders.reduce((acc, o) => acc + Number(o.actualCost || 0), 0);
-
-      // Fondos comprometidos (órdenes aprobadas o en curso pendientes de pagar)
-      const committedOrders = await tx.workOrder.findMany({
-        where: { propertyId: input.propertyId, status: { in: ["AWAITING_APPROVAL", "IN_PROGRESS"] } },
-        select: { estimatedCost: true }
-      });
-      const committedFunds = committedOrders.reduce((acc, o) => acc + Number(o.estimatedCost || 0), 0);
-
-      const reserveMin = agreement?.reserveMinimum ? Number(agreement.reserveMinimum) : 0;
-      const ownerBalance = grossIncome - totalPaidExpenses;
-      // Disponible real para nuevas obligaciones
-      const availableFunds = Math.max(0, ownerBalance - reserveMin - committedFunds);
+      // Fondos disponibles reales desde el motor contable
+      const availableFunds = fiduciarySummary.disponibleNuevasObligaciones;
 
       // Si no requiere aprobación del dueño pero no hay fondos disponibles, se bloquea por liquidez
-      const isBlockedFunds = !requiresOwnerApproval && total > availableFunds;
+      const isBlockedFunds = total > availableFunds;
 
       const initialStatus = requiresOwnerApproval
         ? "AWAITING_APPROVAL"
@@ -149,26 +124,9 @@ export async function approveQuoteAction(data: z.infer<typeof approveQuoteSchema
 
       const totalCost = Number(quote.totalCost);
 
-      // Comprobación de fondos disponibles antes de autorizar el inicio
-      const agreement = await tx.managementAgreement.findFirst({
-        where: { tenantId, propertyId: quote.workOrder.propertyId },
-        orderBy: { effectiveFrom: "desc" }
-      });
-      const reserveMin = agreement?.reserveMinimum ? Number(agreement.reserveMinimum) : 0;
-
-      const charges = await tx.charge.findMany({
-        where: { propertyId: quote.workOrder.propertyId, status: "PAID" },
-        select: { amount: true }
-      });
-      const grossIncome = charges.reduce((acc, c) => acc + Number(c.amount), 0);
-
-      const paidOrders = await tx.workOrder.findMany({
-        where: { propertyId: quote.workOrder.propertyId, status: "COMPLETED" },
-        select: { actualCost: true }
-      });
-      const totalPaidExpenses = paidOrders.reduce((acc, o) => acc + Number(o.actualCost || 0), 0);
-
-      const availableFunds = Math.max(0, grossIncome - totalPaidExpenses - reserveMin);
+      // CUS-09B: Comprobación unificada de fondos fiduciarios disponibles
+      const fiduciarySummary = await accountingService.getPropertyFiduciarySummary(tenantId, quote.workOrder.propertyId, tx);
+      const availableFunds = fiduciarySummary.disponibleNuevasObligaciones;
       const hasSufficientFunds = availableFunds >= totalCost;
 
       // Actualizar cotización a APPROVED
@@ -367,22 +325,82 @@ export async function verifyOwnerContributionAction(data: z.infer<typeof verifyC
         throw new Error("Only property managers can verify and release contribution funds");
       }
 
-      const contribution = await tx.ownerContribution.update({
+      const contribution = await tx.ownerContribution.findUnique({
+        where: { id: input.contributionId, tenantId },
+      });
+
+      if (!contribution) throw new Error("Contribution not found");
+      if (contribution.status === "VERIFIED") {
+        return {
+          contributionId: contribution.id,
+          status: "VERIFIED",
+          releasedAmount: Number(contribution.amount),
+          verifiedAt: contribution.verifiedAt,
+        };
+      }
+
+      const now = new Date();
+      const updatedContribution = await tx.ownerContribution.update({
         where: { id: input.contributionId, tenantId },
         data: {
           status: "VERIFIED",
-          verifiedAt: new Date(),
+          verifiedAt: now,
           verifiedById: userId,
+          availableAt: now,
           notes: input.notes,
         }
       });
 
-      // Ahora los fondos están verificados y formalmente disponibles en el ledger
+      // Acreditar contablemente en el ledger de partida doble
+      const accounts = await accountingService.ensureStandardChartOfAccounts(tenantId, tx);
+      const amountNum = Number(updatedContribution.amount);
+
+      await accountingService.postEntry({
+        tenantId,
+        idempotencyKey: `owner-contrib-${updatedContribution.id}`,
+        effectiveDate: now,
+        description: `Aportación verificada de fondos de propietario: ${updatedContribution.reason}`,
+        createdById: userId,
+        lines: [
+          {
+            accountId: accounts.cashPmEscrow,
+            debit: amountNum,
+            credit: 0,
+            currency: updatedContribution.currency,
+            propertyId: updatedContribution.propertyId,
+            ownerId: updatedContribution.ownerId,
+          },
+          {
+            accountId: accounts.ownerFundsPayable,
+            debit: 0,
+            credit: amountNum,
+            currency: updatedContribution.currency,
+            propertyId: updatedContribution.propertyId,
+            ownerId: updatedContribution.ownerId,
+          }
+        ]
+      }, tx);
+
+      // Registrar además en Transaction para visibilidad en extractos transaccionales del portal
+      await tx.transaction.create({
+        data: {
+          tenantId,
+          propertyId: updatedContribution.propertyId,
+          type: "INCOME",
+          category: "APORTACION_PROPIETARIO",
+          amount: updatedContribution.amount,
+          currency: updatedContribution.currency,
+          description: `Aportación recibida y verificada: ${updatedContribution.reason}`,
+          createdAt: now,
+        }
+      });
+
       return {
-        contributionId: contribution.id,
+        contributionId: updatedContribution.id,
         status: "VERIFIED",
-        releasedAmount: Number(contribution.amount),
-        verifiedAt: contribution.verifiedAt,
+        releasedAmount: amountNum,
+        verifiedAt: updatedContribution.verifiedAt,
+        availableAt: updatedContribution.availableAt,
       };
     });
   });
@@ -413,6 +431,96 @@ export async function verifyWorkOrderCompletionAction(data: z.infer<typeof verif
         status: "COMPLETED",
         technicallyVerified: true,
         paidToVendor: false, // Distinción estricta
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 7B. Registrar Pago a Proveedor (Liquidación en Ledger Contable)
+// -------------------------------------------------------------
+const recordVendorPaymentSchema = z.object({
+  workOrderId: z.string().uuid(),
+  quoteId: z.string().uuid().optional(),
+  amount: z.number().positive(),
+  paymentMethod: z.enum(["TRANSFER", "CASH", "CARD"]).default("TRANSFER"),
+  reference: z.string().min(3),
+  notes: z.string().optional(),
+})
+
+export async function recordVendorPaymentAction(data: z.infer<typeof recordVendorPaymentSchema>) {
+  return safeAction(recordVendorPaymentSchema, data, async (input, tenantId, userId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const wo = await tx.workOrder.findUnique({
+        where: { id: input.workOrderId, tenantId },
+        include: { property: true }
+      });
+
+      if (!wo) throw new Error("Work order not found");
+
+      // Comprobar disponibilidad de fondos en custodia PM para liquidar
+      const fiduciary = await accountingService.getPropertyFiduciarySummary(tenantId, wo.propertyId, tx);
+      if (fiduciary.custodiaPmEfectiva < input.amount) {
+        throw new Error(`Fondos insuficientes en custodia PM para emitir pago (${fiduciary.custodiaPmEfectiva} < ${input.amount}). Requiere aportación previa.`);
+      }
+
+      const now = new Date();
+      const accounts = await accountingService.ensureStandardChartOfAccounts(tenantId, tx);
+
+      // 1. Asiento contable de doble partida: Débito Gasto Mantenimiento, Crédito Caja PM Escrow
+      const entry = await accountingService.postEntry({
+        tenantId,
+        idempotencyKey: `vendor-pay-wo-${wo.id}-${input.reference}`,
+        effectiveDate: now,
+        description: `Pago a proveedor por orden de trabajo ${wo.title}: Ref ${input.reference}`,
+        createdById: userId,
+        lines: [
+          {
+            accountId: accounts.maintenanceExpense,
+            debit: input.amount,
+            credit: 0,
+            currency: "MXN",
+            propertyId: wo.propertyId,
+          },
+          {
+            accountId: accounts.cashPmEscrow,
+            debit: 0,
+            credit: input.amount,
+            currency: "MXN",
+            propertyId: wo.propertyId,
+          }
+        ]
+      }, tx);
+
+      // 2. Registrar egreso en Transaction para extractos del portal
+      await tx.transaction.create({
+        data: {
+          tenantId,
+          propertyId: wo.propertyId,
+          type: "EXPENSE",
+          category: "MANTENIMIENTO",
+          amount: input.amount,
+          currency: "MXN",
+          description: `Pago a proveedor: ${wo.title} (Ref: ${input.reference})`,
+          createdAt: now,
+        }
+      });
+
+      // 3. Actualizar orden
+      await tx.workOrder.update({
+        where: { id: wo.id },
+        data: {
+          actualCost: input.amount,
+          status: "COMPLETED",
+        }
+      });
+
+      return {
+        workOrderId: wo.id,
+        paidAmount: input.amount,
+        journalEntryId: entry.id,
+        reference: input.reference,
+        paidToVendor: true,
       };
     });
   });
@@ -522,6 +630,144 @@ export async function sendChatMessageAction(data: z.infer<typeof sendMessageSche
         translated: translation.translated,
         status: translation.status,
         isAiGenerated: translation.isAiGenerated,
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 10. Configurar Política de Gasto del PM (CUS-09B Corrección 1)
+// -------------------------------------------------------------
+const configurePolicySchema = z.object({
+  propertyId: z.string().uuid(),
+  limit: z.number().min(0).nullable(),
+  currency: z.string().default("MXN"),
+  autoApproveCategories: z.array(z.string()).default([]),
+  emergencyRule: z.string().nullable().optional(),
+})
+
+export async function configurePmExpensePolicyAction(data: z.infer<typeof configurePolicySchema>) {
+  return safeAction(configurePolicySchema, data, async (input, tenantId, userId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const user = await tx.user.findUnique({ where: { id: userId } });
+      const isManager = user?.role === "MANAGER" || user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
+      if (!isManager) {
+        throw new Error("Solo los administradores autorizados pueden configurar la política de gasto del PM.");
+      }
+
+      // Buscar o crear acuerdo de administración activo
+      let agreement = await tx.managementAgreement.findFirst({
+        where: { tenantId, propertyId: input.propertyId },
+        orderBy: { effectiveFrom: "desc" }
+      });
+
+      const now = new Date();
+
+      if (!agreement) {
+        agreement = await tx.managementAgreement.create({
+          data: {
+            tenantId,
+            propertyId: input.propertyId,
+            commissionType: "PERCENTAGE_RENT",
+            commissionRate: 0.10,
+            effectiveFrom: now,
+            reserveMinimum: 2000,
+            pmExpenseLimit: input.limit !== null ? input.limit : null,
+            pmExpenseCurrency: input.currency,
+            autoApproveCategories: input.autoApproveCategories,
+            emergencyRule: input.emergencyRule || null,
+            configuredById: userId,
+            configuredAt: now,
+          }
+        });
+      } else {
+        agreement = await tx.managementAgreement.update({
+          where: { id: agreement.id },
+          data: {
+            pmExpenseLimit: input.limit !== null ? input.limit : null,
+            pmExpenseCurrency: input.currency,
+            autoApproveCategories: input.autoApproveCategories,
+            emergencyRule: input.emergencyRule || null,
+            configuredById: userId,
+            configuredAt: now,
+          }
+        });
+      }
+
+      return {
+        agreementId: agreement.id,
+        configured: input.limit !== null,
+        pmExpenseLimit: input.limit,
+        currency: input.currency,
+        autoApproveCategories: input.autoApproveCategories,
+        emergencyRule: input.emergencyRule,
+        configuredAt: now.toISOString(),
+      };
+    });
+  });
+}
+
+// -------------------------------------------------------------
+// 11. Movimientos de Insumos y Suministros (CUS-09B Cuidado & Mantenimiento)
+// -------------------------------------------------------------
+const recordSupplyMovementSchema = z.object({
+  propertyId: z.string().uuid(),
+  supplyId: z.string().uuid(),
+  type: z.enum(["INFLOW", "OUTFLOW", "ADJUSTMENT"]),
+  quantity: z.number().positive(),
+  reason: z.string().min(3),
+  workOrderId: z.string().uuid().optional(),
+})
+
+export async function recordSupplyMovementAction(data: z.infer<typeof recordSupplyMovementSchema>) {
+  return safeAction(recordSupplyMovementSchema, data, async (input, tenantId, userId) => {
+    return withTenantRLS(tenantId, async (tx) => {
+      const supply = await tx.supplyInventory.findUnique({
+        where: { id: input.supplyId, tenantId }
+      });
+
+      if (!supply) throw new Error("Supply item not found");
+
+      let newBalance = supply.currentStock;
+      if (input.type === "INFLOW") {
+        newBalance += Math.round(input.quantity);
+      } else if (input.type === "OUTFLOW") {
+        if (newBalance < input.quantity) {
+          throw new Error(`Stock insuficiente: disponible ${newBalance}, requerido ${input.quantity}`);
+        }
+        newBalance -= Math.round(input.quantity);
+      } else {
+        // ADJUSTMENT establece el balance de acuerdo con el ajuste
+        newBalance = Math.round(input.quantity);
+      }
+
+      // Actualizar inventario
+      await tx.supplyInventory.update({
+        where: { id: supply.id },
+        data: { currentStock: newBalance }
+      });
+
+      // Crear movimiento auditable
+      const movement = await tx.supplyMovement.create({
+        data: {
+          tenantId,
+          supplyId: supply.id,
+          type: input.type,
+          quantity: Math.round(input.quantity),
+          balance: newBalance,
+          reason: input.reason,
+          workOrderId: input.workOrderId || null,
+          createdById: userId,
+        }
+      });
+
+      return {
+        movementId: movement.id,
+        supplyId: supply.id,
+        type: movement.type,
+        quantity: movement.quantity,
+        newBalance,
+        reason: movement.reason,
       };
     });
   });

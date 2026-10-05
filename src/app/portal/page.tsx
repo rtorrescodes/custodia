@@ -36,13 +36,21 @@ export default async function PortalPage({
   const selectedPropId = sp.propertyId as string || properties[0].id
   const selectedProp = properties.find(p => p.id === selectedPropId) || properties[0]
 
-  let ledgerData: any = { estado: "vacio", transacciones: [], resumen: { saldoActual: {amount:0, currency:"MXN"}, ingresosMes: {amount:0, currency:"MXN"}, egresosMes: {amount:0, currency:"MXN"} } }
+  let ledgerData: any = {
+    estado: "vacio",
+    transacciones: [],
+    cotizacionesPendientes: [],
+    aportacionesFondos: [],
+    resumen: { saldoActual: { amount: 0, currency: "MXN" }, ingresosMes: { amount: 0, currency: "MXN" }, egresosMes: { amount: 0, currency: "MXN" } }
+  }
   
   try {
     const res = await getOwnerLedger(selectedPropId)
     ledgerData = {
-      estado: res.transacciones.length > 0 ? "exito" : "vacio",
+      estado: (res.transacciones.length > 0 || res.cotizacionesPendientes.length > 0 || res.aportacionesFondos.length > 0) ? "exito" : "vacio",
       transacciones: res.transacciones,
+      cotizacionesPendientes: res.cotizacionesPendientes,
+      aportacionesFondos: res.aportacionesFondos,
       resumen: res.resumen
     }
   } catch(e) {

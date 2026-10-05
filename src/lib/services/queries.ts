@@ -4,6 +4,7 @@ import { withTenantRLS } from '@/lib/prisma';
 import { redirect } from 'next/navigation';
 import { resolveMembershipContext, MembershipContext } from '@/lib/auth/membership-guard';
 import { propertyService } from '@/lib/services/property-service';
+import { accountingService } from '@/lib/services/accounting-service';
 
 import { getVerifiedIdentity, VerifiedIdentity } from '@/lib/auth/identity';
 
@@ -222,24 +223,13 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       orderBy: { item: 'asc' },
     });
 
-    // CÁLCULO FIDUCIARIO REAL: Saldo, Reserva, Comprometidos y Disponible
-    const charges = await tx.charge.findMany({
-      where: { propertyId, status: "PAID" },
-      select: { amount: true }
-    });
-    const grossIncome = charges.reduce((acc, c) => acc + Number(c.amount), 0);
-
-    const paidWorkOrders = workOrders.filter(w => w.status === "COMPLETED");
-    const totalPaidExpenses = paidWorkOrders.reduce((acc, w) => acc + Number(w.actualCost || 0), 0);
-    const ownerBalance = grossIncome - totalPaidExpenses;
-
-    const committedWorkOrders = workOrders.filter(w => w.status === "AWAITING_APPROVAL" || w.status === "IN_PROGRESS");
-    const committedFunds = committedWorkOrders.reduce((acc, w) => acc + Number(w.estimatedCost || 0), 0);
+    // CÁLCULO FIDUCIARIO REAL Y UNIFICADO CON EL MOTOR CONTABLE (CUS-09B)
+    const fiduciarySummary = await accountingService.getPropertyFiduciarySummary(tenantId, propertyId, tx);
 
     const activeAgreement = property.agreements[0] || null;
-    const reserveMin = activeAgreement?.reserveMinimum ? Number(activeAgreement.reserveMinimum) : 0;
-    const pmExpenseLimit = activeAgreement?.pmExpenseLimit ? Number(activeAgreement.pmExpenseLimit) : 1000;
-    const availableFunds = Math.max(0, ownerBalance - reserveMin - committedFunds);
+    const reserveMin = fiduciarySummary.reservaMinimaContractual;
+    const pmExpenseLimit = fiduciarySummary.politicaGastoPM.limiteAutorizado;
+    const availableFunds = fiduciarySummary.disponibleNuevasObligaciones;
 
     return {
       id: property.id,
@@ -273,20 +263,29 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
         reservaMinima: reserveMin,
         pmExpenseLimit: pmExpenseLimit,
         autoApproveCategories: activeAgreement.autoApproveCategories || [],
+        reglaEmergencia: activeAgreement.emergencyRule || null,
+        estaConfigurado: pmExpenseLimit !== null,
       } : {
         id: null,
         tipoComision: "PERCENTAGE_RENT",
         tasaComision: 0.10,
         reservaMinima: 2000,
-        pmExpenseLimit: 1000,
+        pmExpenseLimit: null,
         autoApproveCategories: [],
+        reglaEmergencia: null,
+        estaConfigurado: false,
       },
       fondosFiduciarios: {
-        saldoTotal: ownerBalance,
+        custodiaPmEfectiva: fiduciarySummary.custodiaPmEfectiva,
+        cobranzaDirectaDueño: fiduciarySummary.cobranzaDirectaDueño,
+        depositosGarantiaRetenidos: fiduciarySummary.depositosGarantiaRetenidos,
+        fondosNetosDueño: fiduciarySummary.fondosNetosDueño,
         reservaMinima: reserveMin,
-        fondosComprometidos: committedFunds,
+        fondosComprometidos: fiduciarySummary.compromisosVigentes,
         disponibleNuevasObligaciones: availableFunds,
+        esDeficitario: fiduciarySummary.esDeficitario,
         facultadPM: pmExpenseLimit,
+        estaConfigurado: fiduciarySummary.politicaGastoPM.estaConfigurado,
       },
       // CERO SECRETOS EN CLARO: Enmascaramiento estricto por defecto
       boveda: property.vaults.map(v => ({
@@ -301,7 +300,8 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       })),
       ordenesConCotizacion: workOrders.map(w => {
         const estCost = Number(w.estimatedCost || 0);
-        const requiresApproval = estCost > pmExpenseLimit;
+        // Si pmExpenseLimit es null (no configurado), requiere obligatoriamente aprobación del dueño
+        const requiresApproval = pmExpenseLimit === null || estCost > pmExpenseLimit;
         const isBlockedFunds = !requiresApproval && estCost > availableFunds;
         return {
           id: w.id,
@@ -629,6 +629,66 @@ export async function getOwnerLedger(propertyId?: string, requestedTenantId?: st
     const income = txs.filter(t => t.type === 'INCOME').reduce((a, b) => a + Number(b.amount), 0);
     const expense = txs.filter(t => t.type === 'EXPENSE').reduce((a, b) => a + Number(b.amount), 0);
 
+    // CUS-09B: Unificación con el motor contable fiduciario si hay propertyId específico
+    let fiduciary: any = null;
+    let pendingQuotes: any[] = [];
+    let ownerContributions: any[] = [];
+
+    if (propertyId) {
+      fiduciary = await accountingService.getPropertyFiduciarySummary(tenantId, propertyId, tx);
+
+      // Cotizaciones pendientes de decisión del propietario
+      const quotes = await tx.workOrderQuote.findMany({
+        where: {
+          tenantId,
+          status: "SUBMITTED",
+          workOrder: { propertyId }
+        },
+        include: { workOrder: true },
+        orderBy: { createdAt: "desc" }
+      });
+
+      pendingQuotes = quotes.map(q => ({
+        id: q.id,
+        version: q.version,
+        workOrderId: q.workOrderId,
+        titulo: q.workOrder.title,
+        descripcion: q.workOrder.description,
+        costoTotal: Number(q.totalCost),
+        costoManoObra: Number(q.laborCost),
+        costoMateriales: Number(q.materialCost),
+        partidas: q.itemsJson,
+        notas: q.notes,
+        fecha: q.createdAt.toISOString(),
+      }));
+
+      // Aportaciones de fondos de este propietario para esta propiedad
+      const contribs = await tx.ownerContribution.findMany({
+        where: {
+          tenantId,
+          propertyId,
+        },
+        orderBy: { requestedAt: "desc" }
+      });
+
+      ownerContributions = contribs.map(c => ({
+        id: c.id,
+        monto: Number(c.amount),
+        moneda: c.currency,
+        motivo: c.reason,
+        estado: c.status,
+        solicitadoEn: c.requestedAt.toISOString(),
+        reportadoEn: c.reportedAt?.toISOString() || null,
+        verificadoEn: c.verifiedAt?.toISOString() || null,
+        disponibleEn: c.availableAt?.toISOString() || null,
+        comprobanteUrl: c.evidenceUrl || null,
+        notas: c.notes,
+      }));
+    }
+
+    // El saldo actual refleja la custodia efectiva neta (o el neto transaccional si es global)
+    const saldoActual = fiduciary ? fiduciary.fondosNetosDueño : (income - expense);
+
     return {
       estado: txs.length > 0 ? "activo" : "vacio",
       transacciones: txs.map(t => ({
@@ -639,10 +699,21 @@ export async function getOwnerLedger(propertyId?: string, requestedTenantId?: st
         descripcion: t.description,
         categoria: t.category
       })),
+      cotizacionesPendientes: pendingQuotes,
+      aportacionesFondos: ownerContributions,
       resumen: {
-        saldoActual: { amount: income - expense, currency: "MXN" },
+        saldoActual: { amount: saldoActual, currency: "MXN" },
         ingresosMes: { amount: income, currency: "MXN" },
-        egresosMes: { amount: expense, currency: "MXN" }
+        egresosMes: { amount: expense, currency: "MXN" },
+        fiduciario: fiduciary ? {
+          custodiaPmEfectiva: fiduciary.custodiaPmEfectiva,
+          depositosGarantiaRetenidos: fiduciary.depositosGarantiaRetenidos,
+          fondosNetosDueño: fiduciary.fondosNetosDueño,
+          reservaMinima: fiduciary.reservaMinimaContractual,
+          compromisosVigentes: fiduciary.compromisosVigentes,
+          disponibleNuevasObligaciones: fiduciary.disponibleNuevasObligaciones,
+          esDeficitario: fiduciary.esDeficitario,
+        } : null,
       }
     };
   });

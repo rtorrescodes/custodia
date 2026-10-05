@@ -709,8 +709,12 @@ model ManagementAgreement {
   fixedFeeAmount        Decimal?
   commissionBase        CommissionBase @default(COLLECTED)
   reserveMinimum        Decimal        @default(0) // Fondo de reserva mínimo contractual
-  pmExpenseLimit        Decimal        @default(1000) // Límite de gasto autónomo del PM sin consulta
+  pmExpenseLimit        Decimal?       // Límite de gasto autónomo del PM (null = sin configurar, requiere aprobación obligatoria)
+  pmExpenseCurrency     String         @default("MXN")
   autoApproveCategories String[]       @default([]) // Categorías autorizadas autónomamente
+  emergencyRule         String?        // Regla explícita para emergencias (e.g. "HASTA_2000_CON_EVIDENCIA")
+  configuredById        String?        // Usuario que configuró la política
+  configuredAt          DateTime?      // Fecha de configuración formal
   effectiveFrom         DateTime
   effectiveTo    DateTime?
   createdAt      DateTime       @default(now())
@@ -1207,22 +1211,25 @@ enum ContributionStatus {
 }
 
 model OwnerContribution {
-  id           String             @id @default(uuid())
-  tenantId     String
-  propertyId   String
-  ownerId      String
-  amount       Decimal
-  currency     String             @default("MXN")
-  reason       String
-  status       ContributionStatus @default(REQUESTED)
-  requestedAt  DateTime           @default(now())
-  reportedAt   DateTime?
-  verifiedAt   DateTime?
-  verifiedById String?
-  evidenceUrl  String?
-  notes        String?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  id                 String             @id @default(uuid())
+  tenantId           String
+  propertyId         String
+  ownerId            String
+  amount             Decimal
+  currency           String             @default("MXN")
+  reason             String
+  destinationAccount String             @default("PM_ESCROW") // PM_ESCROW, DIRECT_OWNER
+  reference          String?
+  status             ContributionStatus @default(REQUESTED)
+  requestedAt        DateTime           @default(now())
+  reportedAt         DateTime?
+  verifiedAt         DateTime?
+  verifiedById       String?
+  availableAt        DateTime?          // Momento en que los fondos son efectivos en banco
+  evidenceUrl        String?
+  notes              String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
 
@@ -1242,10 +1249,35 @@ model SupplyInventory {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  property  Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  movements SupplyMovement[]
 
   @@index([tenantId, propertyId])
 }
+
+enum SupplyMovementType {
+  INFLOW     // Entrada / Compra
+  OUTFLOW    // Consumo / Uso en estancia o mantenimiento
+  ADJUSTMENT // Ajuste justificado
+}
+
+model SupplyMovement {
+  id          String             @id @default(uuid())
+  tenantId    String
+  supplyId    String
+  type        SupplyMovementType
+  quantity    Int                // Cantidad (+ o -)
+  balance     Int                // Existencia resultante
+  reason      String             // Motivo justificado o referencia
+  workOrderId String?
+  createdById String?
+  createdAt   DateTime           @default(now())
+
+  supply SupplyInventory @relation(fields: [supplyId], references: [id], onDelete: Cascade)
+
+  @@index([supplyId, createdAt])
+}
+
 
 
 

@@ -85,14 +85,55 @@ export interface LedgerTransaction {
   aprobado?: boolean
 }
 
+export interface FiduciarySummaryData {
+  custodiaPmEfectiva: number
+  depositosGarantiaRetenidos: number
+  fondosNetosDueño: number
+  reservaMinima: number
+  compromisosVigentes: number
+  disponibleNuevasObligaciones: number
+  esDeficitario: boolean
+}
+
+export interface PendingQuoteData {
+  id: string
+  version: number
+  workOrderId: string
+  titulo: string
+  descripcion?: string
+  costoTotal: number
+  costoManoObra: number
+  costoMateriales: number
+  partidas?: any
+  notas?: string
+  fecha: string
+}
+
+export interface OwnerContributionData {
+  id: string
+  monto: number
+  moneda: string
+  motivo: string
+  estado: string
+  solicitadoEn: string
+  reportadoEn?: string | null
+  verificadoEn?: string | null
+  disponibleEn?: string | null
+  comprobanteUrl?: string | null
+  notas?: string | null
+}
+
 export interface LedgerSummary {
   saldoActual: Money
   ingresosMes: Money
   egresosMes: Money
+  fiduciario?: FiduciarySummaryData | null
 }
 
 export interface LedgerProps {
   resumen: LedgerSummary
   transacciones: LedgerTransaction[]
+  cotizacionesPendientes?: PendingQuoteData[]
+  aportacionesFondos?: OwnerContributionData[]
   estado?: "cargando" | "vacio" | "error" | "exito"
 }

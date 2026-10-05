@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import assert from "node:assert";
 import { prisma } from "@/lib/prisma";
 import { translateText } from "@/lib/services/translation.service";
 import {
@@ -53,7 +53,7 @@ async function runCUS09TestSuite() {
     if (!isBlocked) throw new Error("Fallo: La orden debió quedar bloqueada por falta de fondos.");
 
     // Simular reporte de aportación
-    const contributionStatusReported = "REPORTED";
+    const contributionStatusReported: string = "REPORTED";
     const fundsReleasedImmediately = contributionStatusReported === "VERIFIED";
     if (fundsReleasedImmediately) throw new Error("Fallo: El comprobante no debe liberar fondos automáticamente.");
 

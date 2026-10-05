@@ -31,7 +31,7 @@ type Estado = "exito" | "cargando" | "vacio" | "error"
 function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
   const cards = [
     {
-      label: "Saldo actual",
+      label: "Saldo neto bajo custodia",
       value: resumen.saldoActual,
       icon: Wallet,
       tone: "bg-primary/10 text-primary",
@@ -49,6 +49,9 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
       tone: "bg-destructive/10 text-destructive",
     },
   ]
+
+  const fid = resumen.fiduciario
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -65,6 +68,65 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
           </Card>
         ))}
       </div>
+
+      {fid && (
+        <Card className="border-border bg-card">
+          <CardHeader className="pb-3 border-b">
+            <CardTitle className="text-sm font-semibold flex items-center justify-between">
+              <span>Desglose Fiduciario y Disponibilidad (CUS-09B)</span>
+              <span className={cn(
+                "px-2 py-0.5 rounded-full text-xs font-mono font-medium",
+                fid.esDeficitario
+                  ? "bg-rose-500/10 text-rose-600 border border-rose-500/30"
+                  : "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30"
+              )}>
+                {fid.esDeficitario ? "Cuenta en Déficit Operativo" : "Liquidez Suficiente"}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+            <div>
+              <p className="text-muted-foreground">Efectivo en Custodia PM:</p>
+              <p className="font-mono font-bold text-sm text-foreground mt-0.5">
+                ${fid.custodiaPmEfectiva.toLocaleString()} MXN
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Depósito Garantía (Pasivo):</p>
+              <p className="font-mono font-medium text-sm text-amber-600 dark:text-amber-400 mt-0.5">
+                −${fid.depositosGarantiaRetenidos.toLocaleString()} MXN
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Reserva Mínima Contractual:</p>
+              <p className="font-mono font-medium text-sm text-muted-foreground mt-0.5">
+                −${fid.reservaMinima.toLocaleString()} MXN
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Compromisos Vigentes:</p>
+              <p className="font-mono font-medium text-sm text-muted-foreground mt-0.5">
+                −${fid.compromisosVigentes.toLocaleString()} MXN
+              </p>
+            </div>
+            <div className="col-span-2 md:col-span-4 pt-2 border-t border-border flex items-center justify-between">
+              <div>
+                <span className="font-semibold text-foreground">Disponible Real para Nuevas Obligaciones:</span>
+                <p className="text-[11px] text-muted-foreground">
+                  (Custodia PM − Depósitos en Garantía − Reserva Mínima − Compromisos Aprobados)
+                </p>
+              </div>
+              <span className={cn(
+                "text-base font-bold font-mono",
+                fid.disponibleNuevasObligaciones < 0 ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
+              )}>
+                ${fid.disponibleNuevasObligaciones.toLocaleString()} MXN
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 p-4 text-xs text-neutral-600 dark:text-neutral-400 flex flex-col sm:flex-row justify-between gap-2 items-start sm:items-center">
         <div>
           <span className="font-semibold text-neutral-900 dark:text-neutral-100">Transparencia Fiduciaria (ADR-002):</span>
@@ -159,13 +221,17 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-const UMBRAL_APROBACION = 3000 // gastos por encima requieren aprobación
-
 import { approveTransaction } from "@/app/actions/portal.actions"
+import { approveQuoteAction, reportOwnerContributionAction } from "@/app/actions/property-operations.actions"
+
+const UMBRAL_APROBACION = 3000 // gastos por encima requieren aprobación
 
 export function LedgerView({ data, propertyId }: { data: LedgerProps, propertyId: string }) {
   const [estado, setEstado] = useState<Estado>(data.estado === "vacio" ? "vacio" : "exito")
   const [transacciones, setTransacciones] = useState(data.transacciones)
+  const [quotes, setQuotes] = useState(data.cotizacionesPendientes || [])
+  const [contributions, setContributions] = useState(data.aportacionesFondos || [])
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   async function aprobar(id: string) {
     try {
@@ -179,6 +245,50 @@ export function LedgerView({ data, propertyId }: { data: LedgerProps, propertyId
       }
     } catch(e) {
       alert("Error aprobando")
+    }
+  }
+
+  async function handleApproveQuote(quoteId: string, version: number) {
+    setActionLoading(quoteId)
+    try {
+      const res = await approveQuoteAction({
+        quoteId,
+        expectedVersion: version,
+        reason: "Aprobación formal del propietario desde el Portal"
+      })
+      if (res.success) {
+        setQuotes(prev => prev.filter(q => q.id !== quoteId))
+        alert("¡Cotización aprobada formalmente!")
+      } else {
+        alert("Error: " + (res.error || "No se pudo aprobar la cotización"))
+      }
+    } catch (err: any) {
+      alert("Error: " + err.message)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  async function handleReportPayment(contribId: string) {
+    const ref = prompt("Ingresa la referencia o URL del comprobante de transferencia bancaria:")
+    if (!ref) return
+    setActionLoading(contribId)
+    try {
+      const res = await reportOwnerContributionAction({
+        contributionId: contribId,
+        evidenceUrl: ref.startsWith("http") ? ref : "https://custodia.app/evidence/" + ref,
+        notes: `Transferencia reportada: ${ref}`,
+      })
+      if (res.success) {
+        setContributions(prev => prev.map(c => c.id === contribId ? { ...c, estado: "REPORTED", reportadoEn: new Date().toISOString() } : c))
+        alert("Comprobante reportado. Pendiente de verificación por la administración PM.")
+      } else {
+        alert("Error: " + (res.error || "No se pudo reportar el pago"))
+      }
+    } catch (err: any) {
+      alert("Error: " + err.message)
+    } finally {
+      setActionLoading(null)
     }
   }
 
@@ -219,6 +329,111 @@ export function LedgerView({ data, propertyId }: { data: LedgerProps, propertyId
       {estado === "exito" && (
         <>
           <SummaryCards resumen={data.resumen} />
+
+          {/* CUS-09B: Cotizaciones que requieren autorización formal del dueño */}
+          {quotes.length > 0 && (
+            <Card className="border-blue-500/30 bg-blue-500/5">
+              <CardHeader className="pb-3 border-b border-blue-500/20">
+                <CardTitle className="text-sm font-semibold flex items-center justify-between text-blue-900 dark:text-blue-200">
+                  <span className="flex items-center gap-2">
+                    <TriangleAlert className="size-4 text-blue-600" />
+                    Cotizaciones Pendientes de Autorización ({quotes.length})
+                  </span>
+                  <span className="text-xs font-normal text-muted-foreground">Versión controlada</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="divide-y divide-border pt-2">
+                {quotes.map((q) => (
+                  <div key={q.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-foreground">{q.titulo}</span>
+                        <span className="bg-muted px-2 py-0.5 rounded font-mono text-[11px]">v{q.version}</span>
+                      </div>
+                      <p className="text-muted-foreground mt-0.5">{q.descripcion || "Mantenimiento preventivo/correctivo"}</p>
+                      <div className="flex gap-3 text-[11px] text-muted-foreground mt-1">
+                        <span>Mano de obra: ${q.costoManoObra}</span>
+                        <span>Materiales: ${q.costoMateriales}</span>
+                        <span>Fecha: {new Date(q.fecha).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-mono font-bold text-base text-foreground">
+                        ${q.costoTotal.toLocaleString()} MXN
+                      </span>
+                      <Button
+                        size="sm"
+                        disabled={actionLoading === q.id}
+                        onClick={() => handleApproveQuote(q.id, q.version)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg h-8 text-xs font-semibold"
+                      >
+                        <Check className="size-3.5 mr-1" />
+                        {actionLoading === q.id ? "Aprobando..." : "Aprobar Cotización"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* CUS-09B: Solicitudes de aportación de fondos */}
+          {contributions.length > 0 && (
+            <Card className="border-purple-500/30 bg-purple-500/5">
+              <CardHeader className="pb-3 border-b border-purple-500/20">
+                <CardTitle className="text-sm font-semibold flex items-center justify-between text-purple-900 dark:text-purple-200">
+                  <span className="flex items-center gap-2">
+                    <Wallet className="size-4 text-purple-600" />
+                    Solicitudes de Aportación de Fondos ({contributions.length})
+                  </span>
+                  <span className="text-xs font-normal text-muted-foreground">Destino: PM_ESCROW</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="divide-y divide-border pt-2">
+                {contributions.map((c) => (
+                  <div key={c.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-foreground">{c.motivo}</span>
+                        <span className={cn(
+                          "px-2 py-0.5 rounded text-[11px] font-medium",
+                          c.estado === "VERIFIED" ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300" :
+                          c.estado === "REPORTED" ? "bg-blue-500/20 text-blue-700 dark:text-blue-300" :
+                          "bg-amber-500/20 text-amber-700 dark:text-amber-300"
+                        )}>
+                          {c.estado === "VERIFIED" ? "✓ Fondos Disponibles" :
+                           c.estado === "REPORTED" ? "En Verificación PM" : "Requerido"}
+                        </span>
+                      </div>
+                      <p className="text-muted-foreground mt-0.5">
+                        Solicitado el {new Date(c.solicitadoEn).toLocaleDateString()}
+                        {c.reportadoEn && ` · Comprobante enviado el ${new Date(c.reportadoEn).toLocaleDateString()}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-mono font-bold text-base text-foreground">
+                        ${c.monto.toLocaleString()} {c.moneda}
+                      </span>
+                      {c.estado === "REQUESTED" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={actionLoading === c.id}
+                          onClick={() => handleReportPayment(c.id)}
+                          className="rounded-lg h-8 text-xs font-semibold"
+                        >
+                          Adjuntar Comprobante
+                        </Button>
+                      )}
+                      {c.estado === "REPORTED" && (
+                        <span className="text-xs text-muted-foreground italic">Comprobante en revisión</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader className="border-b">

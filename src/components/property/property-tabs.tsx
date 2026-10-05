@@ -21,7 +21,9 @@ import {
   Send,
   Plus,
   ShieldAlert,
-  ArrowRight
+  ArrowRight,
+  Package,
+  Layers,
 } from "lucide-react"
 import { getDictionary, Locale } from "@/lib/i18n"
 import {
@@ -30,6 +32,8 @@ import {
   scheduleStayAction,
   sendChatMessageAction,
   requestOwnerContributionAction,
+  configurePmExpensePolicyAction,
+  recordSupplyMovementAction,
 } from "@/app/actions/property-operations.actions"
 import {
   revealVaultSecretAction,
@@ -75,7 +79,37 @@ export function PropertyTabs({
   const [showOriginal, setShowOriginal] = useState<Record<string, boolean>>({});
   const [sendingMsg, setSendingMsg] = useState(false);
 
+  // Estado de Suministros & Insumos
+  const [supplies, setSupplies] = useState(property.suministros || []);
+  const [selectedSupplyId, setSelectedSupplyId] = useState("");
+  const [supplyQty, setSupplyQty] = useState("");
+  const [supplyType, setSupplyType] = useState<"INFLOW" | "OUTFLOW" | "ADJUSTMENT">("OUTFLOW");
+  const [supplyReason, setSupplyReason] = useState("");
+  const [loadingSupply, setLoadingSupply] = useState(false);
+
   // Handlers
+  async function handleRecordSupplyMovement(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedSupplyId || !supplyQty || !supplyReason) return;
+    setLoadingSupply(true);
+    const qty = parseFloat(supplyQty);
+    const res = await recordSupplyMovementAction({
+      propertyId: property.id,
+      supplyId: selectedSupplyId,
+      type: supplyType,
+      quantity: qty,
+      reason: supplyReason,
+    });
+    if (res.success && res.data) {
+      setSupplies(supplies.map((s: any) => s.id === selectedSupplyId ? { ...s, stockActual: res.data?.newBalance } : s));
+      setSupplyQty("");
+      setSupplyReason("");
+      alert("Movimiento de inventario registrado con éxito.");
+    } else {
+      alert("Error: " + (res.error || "No se pudo registrar el movimiento"));
+    }
+    setLoadingSupply(false);
+  }
   async function handleAddExpense(e: React.FormEvent) {
     e.preventDefault();
     if (!newExpenseTitle || !newExpenseCost) return;
@@ -286,7 +320,7 @@ export function PropertyTabs({
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid grid-cols-2 md:grid-cols-5 h-auto p-1 bg-muted/60 rounded-xl gap-1">
+        <TabsList className="grid grid-cols-2 md:grid-cols-6 h-auto p-1 bg-muted/60 rounded-xl gap-1">
           <TabsTrigger value="expenses" className="text-xs py-2">
             <DollarSign className="size-3.5 mr-1" />
             {dict.tabs.expenses}
@@ -294,6 +328,10 @@ export function PropertyTabs({
           <TabsTrigger value="stays" className="text-xs py-2">
             <CalendarDays className="size-3.5 mr-1" />
             {dict.tabs.stays}
+          </TabsTrigger>
+          <TabsTrigger value="supplies" className="text-xs py-2">
+            <Package className="size-3.5 mr-1" />
+            Suministros
           </TabsTrigger>
           <TabsTrigger value="vault" className="text-xs py-2">
             <KeyRound className="size-3.5 mr-1" />
@@ -318,17 +356,29 @@ export function PropertyTabs({
                 <CardDescription className="text-xs">{dict.expensesTab.subtitle}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-xs flex items-center justify-between">
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <ShieldAlert className="size-4 text-amber-500 shrink-0" />
                     <span>
-                      {dict.expensesTab.approvalThreshold}{" "}
-                      <strong className="text-foreground">${property.acuerdo?.reservaMinima || 2000} MXN</strong>
+                      {property.acuerdo?.estaConfigurado ? (
+                        <>
+                          Facultad PM: <strong className="text-foreground">${property.acuerdo?.pmExpenseLimit} MXN</strong> (Gastos mayores requieren firma Dueño)
+                        </>
+                      ) : (
+                        <span className="text-amber-700 dark:text-amber-400 font-medium">
+                          ⚠️ Política de gasto no configurada: Todos los gastos requieren autorización del dueño
+                        </span>
+                      )}
                     </span>
                   </div>
-                  <Badge variant="outline" className="text-[11px] border-amber-500/40 text-amber-600">
-                    Fondo de Reserva
-                  </Badge>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant="outline" className="text-[11px] border-amber-500/40 text-amber-600">
+                      Reserva: ${property.acuerdo?.reservaMinima || 2000} MXN
+                    </Badge>
+                    <Badge variant="secondary" className="text-[11px]">
+                      Disponible: ${(property.fondosFiduciarios?.disponibleNuevasObligaciones || 0).toLocaleString()} MXN
+                    </Badge>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
@@ -530,6 +580,114 @@ export function PropertyTabs({
                   </div>
                   <Button type="submit" className="w-full h-9 rounded-xl text-xs font-semibold">
                     + Agendar Llegada
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* ---------------- 2.5. SUMINISTROS & INSUMOS (CUS-09B) ---------------- */}
+        <TabsContent value="supplies" className="space-y-4 pt-3">
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card className="md:col-span-2 border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Package className="size-4 text-primary" />
+                  Inventario de Insumos y Suministros
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Control de consumos por reparaciones, estancias de dueños y reposiciones
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {supplies.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-4 text-center">No hay insumos registrados en esta propiedad.</p>
+                ) : (
+                  <div className="divide-y divide-border">
+                    {supplies.map((s: any) => (
+                      <div key={s.id} className="py-2.5 flex items-center justify-between text-xs">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-foreground text-sm">{s.item}</span>
+                            <Badge variant="outline" className="text-[10px]">{s.categoria}</Badge>
+                          </div>
+                          <p className="text-muted-foreground text-[11px] mt-0.5">
+                            Mínimo requerido: {s.stockMinimo} {s.unidad}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className={`font-mono font-bold text-sm ${s.stockActual <= s.stockMinimo ? "text-amber-500" : "text-foreground"}`}>
+                            {s.stockActual} {s.unidad}
+                          </span>
+                          {s.stockActual <= s.stockMinimo && (
+                            <p className="text-[10px] text-amber-500 font-medium">Bajo stock</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Registrar Movimiento</CardTitle>
+                <CardDescription className="text-xs">Entrada, consumo o ajuste auditable</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleRecordSupplyMovement} className="space-y-3 text-xs">
+                  <div>
+                    <label className="font-medium text-foreground">Insumo</label>
+                    <select
+                      value={selectedSupplyId}
+                      onChange={(e) => setSelectedSupplyId(e.target.value)}
+                      required
+                      className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-xs mt-1"
+                    >
+                      <option value="">Selecciona insumo...</option>
+                      {supplies.map((s: any) => (
+                        <option key={s.id} value={s.id}>{s.item} ({s.stockActual} {s.unidad})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-medium text-foreground">Tipo de Movimiento</label>
+                    <select
+                      value={supplyType}
+                      onChange={(e: any) => setSupplyType(e.target.value)}
+                      className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-xs mt-1"
+                    >
+                      <option value="OUTFLOW">Consumo / Salida (Mantenimiento/Estadía)</option>
+                      <option value="INFLOW">Reabastecimiento / Entrada</option>
+                      <option value="ADJUSTMENT">Ajuste de Conteo Físico</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-medium text-foreground">Cantidad</label>
+                    <Input
+                      type="number"
+                      step="any"
+                      placeholder="1"
+                      value={supplyQty}
+                      onChange={(e) => setSupplyQty(e.target.value)}
+                      required
+                      className="h-9 mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-medium text-foreground">Motivo Justificado</label>
+                    <Input
+                      placeholder="Ej. Uso en reparación de fuga de baño"
+                      value={supplyReason}
+                      onChange={(e) => setSupplyReason(e.target.value)}
+                      required
+                      className="h-9 mt-1"
+                    />
+                  </div>
+                  <Button type="submit" disabled={loadingSupply} className="w-full h-9 rounded-xl text-xs font-semibold">
+                    {loadingSupply ? "Registrando..." : "+ Guardar Movimiento"}
                   </Button>
                 </form>
               </CardContent>
