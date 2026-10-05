@@ -49,6 +49,10 @@ model Tenant {
   inspections   Inspection[]
   agreements   ManagementAgreement[]
   settlementProposals SettlementProposal[]
+  unitAssets    UnitAsset[]
+  workOrderQuotes WorkOrderQuote[]
+  alddeaPassDelegations AlddeaPassDelegation[]
+  communicationThreads CommunicationThread[]
 }
 
 model User {
@@ -219,6 +223,9 @@ model Property {
   journalLines JournalLine[]
   settlementProposals SettlementProposal[]
   inspections  Inspection[]
+  unitAssets   UnitAsset[]
+  communicationThreads CommunicationThread[]
+  alddeaPassDelegations AlddeaPassDelegation[]
 }
 
 model PropertyOwner {
@@ -239,19 +246,32 @@ model WorkOrder {
   id            String   @id @default(uuid())
   tenantId      String
   propertyId    String
-  assignedToId  String?
+  reporterId    String?  // Inquilino o usuario reportante
+  assignedToId  String?  // Proveedor o staff asignado
+  category      String   @default("GENERAL") // PLUMBING, ELECTRICAL, HVAC, APPLIANCE, MASONRY, LOCKSMITH, GENERAL
+  priority      WOPriority @default(MEDIUM)
   title         String
   description   String
   status        WOStatus @default(PENDING)
   estimatedCost Decimal?
   actualCost    Decimal?
+  cancellationReason String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  tenant     Tenant         @relation(fields: [tenantId], references: [id])
-  property   Property       @relation(fields: [propertyId], references: [id])
-  assignedTo User?          @relation("AssignedStaff", fields: [assignedToId], references: [id])
+  tenant     Tenant              @relation(fields: [tenantId], references: [id])
+  property   Property            @relation(fields: [propertyId], references: [id])
+  assignedTo User?               @relation("AssignedStaff", fields: [assignedToId], references: [id])
   evidences  FileEvidence[]
+  quotes     WorkOrderQuote[]
+  alddeaPass AlddeaPassDelegation?
+}
+
+enum WOPriority {
+  LOW
+  MEDIUM
+  HIGH
+  EMERGENCY
 }
 
 enum WOStatus {
@@ -903,5 +923,145 @@ model Inspection {
   @@index([tenantId, propertyId])
   @@index([leaseId])
 }
+
+// =========================================================
+// CUS-05: Mantenimiento, Presupuestos, Activos y Alddea
+// =========================================================
+
+model UnitAsset {
+  id             String    @id @default(uuid())
+  tenantId       String
+  propertyId     String
+  name           String    // e.g. "Aire Acondicionado Sala", "Calentador Calorex 40L"
+  category       String    // HVAC, PLUMBING, APPLIANCE, ELECTRICAL, OTHER
+  brand          String?
+  model          String?
+  serialNumber   String?
+  installedAt    DateTime?
+  warrantyExpiresAt DateTime?
+  maintenanceIntervalMonths Int @default(6) // Frecuencia recomendada
+  lastServicedAt DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
+enum QuoteStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  SUPERSEDED
+}
+
+model WorkOrderQuote {
+  id             String      @id @default(uuid())
+  tenantId       String
+  workOrderId    String
+  vendorId       String?
+  version        Int         @default(1)
+  laborCost      Decimal     @default(0)
+  materialCost   Decimal     @default(0)
+  totalCost      Decimal     // Calculado estrictamente en servidor: labor + materials
+  currency       String      @default("MXN")
+  status         QuoteStatus @default(SUBMITTED)
+  itemsJson      Json        // Partidas detalladas: [{ description, qty, unitPrice, amount }]
+  validUntil     DateTime?
+  notes          String?
+  approvedById   String?
+  approvedAt     DateTime?
+  approvalReason String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId, version])
+  @@index([tenantId, status])
+}
+
+enum DelegationStatus {
+  PREPARED
+  EMITTED
+  REVOKED
+  EXPIRED
+}
+
+model AlddeaPassDelegation {
+  id              String           @id @default(uuid())
+  tenantId        String
+  workOrderId     String           @unique
+  propertyId      String
+  visitorName     String
+  visitorCompany  String?
+  purpose         String           // e.g. "Mantenimiento Fontanería - WO #1234"
+  validFrom       DateTime
+  validTo         DateTime
+  delegatedById   String
+  alddeaBridgeUrl String?
+  externalPassId  String?          // ID del pase en Alddea si se emitió
+  status          DelegationStatus @default(PREPARED)
+  isMock          Boolean          @default(true) // Verdadero hasta tener integración bilateral autorizada
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  property  Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
+// =========================================================
+// CUS-06: Portales, Comunicación y Asistente IA
+// =========================================================
+
+enum ThreadAudience {
+  INTERNAL_TEAM
+  PM_OWNER
+  PM_RENTER
+  PM_VENDOR
+}
+
+model CommunicationThread {
+  id          String         @id @default(uuid())
+  tenantId    String
+  propertyId  String?
+  workOrderId String?
+  audience    ThreadAudience @default(INTERNAL_TEAM)
+  title       String
+  isClosed    Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property?              @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  messages CommunicationMessage[]
+
+  @@index([tenantId, audience])
+}
+
+model CommunicationMessage {
+  id          String   @id @default(uuid())
+  threadId    String
+  senderId    String?  // Nulo si fue enviado por IA Conserje
+  senderName  String
+  senderRole  String   // PM_ADMIN, OWNER, RENTER, VENDOR, AI_ASSISTANT
+  content     String
+  isInternal  Boolean  @default(false) // Los mensajes marcados internos no se exponen al inquilino/dueño
+  attachments Json?    // Archivos o fotos adjuntas seguras
+  createdAt   DateTime @default(now())
+
+  thread CommunicationThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
 
 
