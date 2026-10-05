@@ -294,7 +294,7 @@ export const paymentService = {
    * Función interna para asentar el cobro confirmado
    */
   async _postConfirmedPaymentEntry(tx: any, payment: any, createdById?: string) {
-    const accounts = await accountingService.ensureStandardChartOfAccounts(payment.tenantId);
+    const accounts = await accountingService.ensureStandardChartOfAccounts(payment.tenantId, tx);
     let cashAccountId = accounts.cashPmEscrow;
 
     let propertyId = undefined;

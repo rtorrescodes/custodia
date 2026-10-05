@@ -38,7 +38,8 @@ export const accountingService = {
   /**
    * Obtiene o inicializa el plan de cuentas estándar para el tenant
    */
-  async ensureStandardChartOfAccounts(tenantId: string): Promise<StandardAccounts> {
+  async ensureStandardChartOfAccounts(tenantId: string, client?: any): Promise<StandardAccounts> {
+    const db = client || prisma;
     const defaultAccounts = [
       { code: '1000_CASH_PM_ESCROW', name: 'Caja y Bancos (Custodia PM)', type: 'ASSET' as const },
       { code: '1010_CASH_DIRECT_OWNER', name: 'Cobranza Directa Propietario (Informativa)', type: 'ASSET' as const },
@@ -52,7 +53,7 @@ export const accountingService = {
     const accountsMap: Record<string, string> = {};
 
     for (const acc of defaultAccounts) {
-      const record = await prisma.ledgerAccount.upsert({
+      const record = await db.ledgerAccount.upsert({
         where: {
           tenantId_code: { tenantId, code: acc.code }
         },

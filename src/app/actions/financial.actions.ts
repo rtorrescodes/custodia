@@ -138,3 +138,45 @@ export async function createSettlementProposalAction(input: z.infer<typeof creat
     return { proposal }
   })
 }
+
+// 6. Generación y emisión de Recibo inmutable (CUS-03D)
+const generateReceiptSchema = z.object({
+  paymentId: z.string().uuid(),
+  payerTaxId: z.string().optional(),
+})
+
+export async function generateReceiptAction(input: z.infer<typeof generateReceiptSchema>) {
+  return safeAction(generateReceiptSchema, input, async (data, tenantId) => {
+    const { receiptService } = await import("@/lib/services/receipt-service")
+    const receipt = await receiptService.generateReceipt({
+      tenantId,
+      paymentId: data.paymentId,
+      payerTaxId: data.payerTaxId,
+    })
+
+    revalidatePath("/rentas")
+    revalidatePath("/inquilino")
+    return { receipt }
+  })
+}
+
+// 7. Conciliación bancaria manual (CUS-03C)
+const confirmBankMatchSchema = z.object({
+  lineId: z.string().uuid(),
+  paymentId: z.string().uuid(),
+})
+
+export async function confirmBankMatchAction(input: z.infer<typeof confirmBankMatchSchema>) {
+  return safeAction(confirmBankMatchSchema, input, async (data, tenantId, userId) => {
+    const { bankReconciliationService } = await import("@/lib/services/bank-reconciliation-service")
+    const result = await bankReconciliationService.confirmMatch(
+      tenantId,
+      data.lineId,
+      data.paymentId,
+      userId
+    )
+
+    revalidatePath("/rentas")
+    return result
+  })
+}

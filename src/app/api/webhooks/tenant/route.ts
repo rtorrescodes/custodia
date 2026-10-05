@@ -1,44 +1,32 @@
 import { NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { webhookService } from "@/lib/services/webhook-service"
 
-// MOCK: Webhook receptor for Rent Collection (Stripe Connect / MercadoPago)
+// Receptor durable para cobranza de rentas (Stripe Connect / MercadoPago / STP) (CUS-03B)
 export async function POST(req: Request) {
   try {
     const payload = await req.json()
-    // En producción se valida el Webhook Signature
+    const signature = req.headers.get("stripe-signature") || undefined;
     
-    switch (payload.type) {
-      case "payment_intent.succeeded": {
-        const paymentIntent = payload.data.object
-        
-        // El PaymentIntent debe tener en sus metadatos el leaseId y propertyId
-        const leaseId = paymentIntent.metadata?.leaseId
-        const propertyId = paymentIntent.metadata?.propertyId
-        const tenantId = paymentIntent.metadata?.tenantId
+    const eventType = payload.type || payload.eventType || "unknown";
+    const externalId = payload.id || `ext_${Date.now()}`;
+    const tenantId = payload.data?.object?.metadata?.tenantId || payload.metadata?.tenantId || payload.tenantId;
 
-        if (leaseId && propertyId && tenantId) {
-          // Registrar la transacción aprobada en el Ledger de Trust Accounting
-          await prisma.transaction.create({
-            data: {
-              tenantId,
-              propertyId,
-              amount: paymentIntent.amount / 100, // asumiendo centavos
-              currency: paymentIntent.currency.toUpperCase(),
-              type: "INCOME",
-              category: "RENTA",
-              description: `Pago de Renta Automático - Contrato ${leaseId.substring(0, 8)}`,
-              requiresApproval: false,
-              isApproved: true,
-            }
-          })
-        }
-        break
-      }
+    if (!tenantId) {
+      return NextResponse.json({ error: "Falta tenantId en metadata del webhook" }, { status: 400 });
     }
 
-    return NextResponse.json({ received: true })
-  } catch (error) {
-    console.error(error)
-    return NextResponse.json({ error: "Webhook Error" }, { status: 400 })
+    const result = await webhookService.ingestAndProcess({
+      tenantId,
+      provider: "STRIPE",
+      externalId,
+      eventType,
+      payload,
+      signature,
+    });
+
+    return NextResponse.json({ received: true, ...result })
+  } catch (error: any) {
+    console.error("Webhook processing error:", error)
+    return NextResponse.json({ error: "Webhook Error", message: error.message }, { status: 400 })
   }
 }

@@ -42,6 +42,11 @@ model Tenant {
   journalEntries JournalEntry[]
   charges      Charge[]
   payments     Payment[]
+  receipts     Receipt[]
+  bankStatements BankStatement[]
+  webhookEvents WebhookEvent[]
+  contractDocuments ContractDocument[]
+  inspections   Inspection[]
   agreements   ManagementAgreement[]
   settlementProposals SettlementProposal[]
 }
@@ -213,6 +218,7 @@ model Property {
   agreements   ManagementAgreement[]
   journalLines JournalLine[]
   settlementProposals SettlementProposal[]
+  inspections  Inspection[]
 }
 
 model PropertyOwner {
@@ -425,6 +431,9 @@ model Lease {
   evidences LeaseEvidence[]
   charges   Charge[]
   payments  Payment[]
+  receipts  Receipt[]
+  contractDocuments ContractDocument[]
+  inspections Inspection[]
   journalLines JournalLine[]
 }
 
@@ -604,6 +613,7 @@ model Payment {
   tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lease        Lease?               @relation(fields: [leaseId], references: [id], onDelete: SetNull)
   applications PaymentApplication[]
+  receipt      Receipt?
 
   @@index([tenantId, status])
   @@index([leaseId])
@@ -689,4 +699,209 @@ model SettlementProposal {
   @@index([tenantId, status])
   @@index([ownerId])
 }
+
+// =========================================================
+// CUS-03: Webhooks durables, Recibos y Conciliación Bancaria
+// =========================================================
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  DEAD_LETTER
+}
+
+model WebhookEvent {
+  id           String        @id @default(uuid())
+  tenantId     String
+  provider     String        // STRIPE, MERCADOPAGO, OPENPAY, STP
+  externalId   String?       // ID del evento en Stripe/proveedor (e.g. evt_123)
+  eventType    String        // payment_intent.succeeded, charge.refunded, etc.
+  payload      Json          // Payload bruto recibido
+  status       WebhookStatus @default(RECEIVED)
+  attempts     Int           @default(0)
+  lastError    String?
+  signature    String?
+  receivedAt   DateTime      @default(now())
+  processedAt  DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider, externalId])
+  @@index([tenantId, status])
+  @@index([provider, eventType])
+}
+
+enum ReceiptStatus {
+  ISSUED
+  CANCELED
+}
+
+model Receipt {
+  id             String        @id @default(uuid())
+  tenantId       String
+  paymentId      String        @unique
+  leaseId        String?
+  folio          String        // Consecutivo único formateado: REC-YYYY-000001
+  consecutiveNum Int
+  series         String        @default("REC")
+  issuedAt       DateTime      @default(now())
+  amount         Decimal
+  currency       String        @default("MXN")
+  payerName      String
+  payerTaxId     String?       // RFC o identificador fiscal opcional
+  legalDisclaimer String       @default("Comprobante interno de pago sin validez fiscal (No deducible / No CFDI).")
+  snapshotJson   Json          // Desglose inmutable: cargos cubiertos, folio, fechas, montos
+  status         ReceiptStatus @default(ISSUED)
+  pdfUrl         String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  lease   Lease?   @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, series, consecutiveNum])
+  @@index([tenantId, issuedAt])
+}
+
+enum StatementLineStatus {
+  UNMATCHED
+  PROPOSED
+  MATCHED
+  DISCARDED
+}
+
+model BankStatement {
+  id          String   @id @default(uuid())
+  tenantId    String
+  bankName    String
+  accountNum  String?  // Últimos 4 dígitos o clabe
+  filename    String
+  uploadedAt  DateTime @default(now())
+  totalRows   Int      @default(0)
+  importedById String?
+
+  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines  BankStatementLine[]
+
+  @@index([tenantId])
+}
+
+model BankStatementLine {
+  id             String              @id @default(uuid())
+  statementId    String
+  rowNumber      Int
+  operationDate  DateTime
+  reference      String?
+  concept        String
+  amount         Decimal             // Positivo para abonos, negativo para cargos
+  currency       String              @default("MXN")
+  status         StatementLineStatus @default(UNMATCHED)
+  matchedPaymentId String?
+  matchConfidence Decimal?          // 0.00 a 1.00
+  matchReason    String?
+
+  statement BankStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+
+  @@index([statementId, status])
+}
+
+// =========================================================
+// CUS-04: Contratos, Firma Electrónica e Inspecciones
+// =========================================================
+
+enum DocumentType {
+  LEASE_AGREEMENT
+  ADDENDUM
+  INSPECTION_ACTA
+  TERMINATION
+  OTHER
+}
+
+model ContractDocument {
+  id             String       @id @default(uuid())
+  tenantId       String
+  leaseId        String
+  type           DocumentType @default(LEASE_AGREEMENT)
+  title          String
+  version        Int          @default(1)
+  fileUrl        String?
+  fileSha256     String?      // Hash criptográfico de integridad
+  isLatest       Boolean      @default(true)
+  metadata       Json?        // Clausulado renderizado, campos clave
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lease              Lease               @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  signatureRequests  SignatureRequest[]
+
+  @@index([tenantId, leaseId])
+}
+
+enum SignatureStatus {
+  PENDING
+  SIGNED
+  REJECTED
+  EXPIRED
+}
+
+model SignatureRequest {
+  id           String          @id @default(uuid())
+  documentId   String
+  signerEmail  String
+  signerName   String
+  signerRole   String          // RENTER, LANDLORD, PM, WITNESS
+  provider     String          @default("INTERNAL_DIGITAL") // INTERNAL_DIGITAL, DOCUSIGN, MIFIE
+  status       SignatureStatus @default(PENDING)
+  signatureToken String        @unique
+  signedAt     DateTime?
+  ipAddress    String?
+  userAgent    String?
+  signatureEvidence Json?      // Firma manuscrita vector/base64, hash, auditoría NOM-151/eIDAS
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  document ContractDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, status])
+}
+
+enum InspectionType {
+  MOVE_IN
+  MOVE_OUT
+  ROUTINE
+}
+
+enum InspectionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  DISPUTED
+}
+
+model Inspection {
+  id           String           @id @default(uuid())
+  tenantId     String
+  propertyId   String
+  leaseId      String?
+  type         InspectionType   @default(MOVE_IN)
+  status       InspectionStatus @default(SCHEDULED)
+  inspectorName String
+  inspectionDate DateTime       @default(now())
+  summaryNotes String?
+  checklistJson Json            // Zonas (sala, baño, etc.), condiciones y fotos con hash sha256
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  lease    Lease?   @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, propertyId])
+  @@index([leaseId])
+}
+
 

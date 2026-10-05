@@ -129,3 +129,87 @@ export async function authorizeLease(input: z.infer<typeof authorizeLeaseSchema>
   });
 }
 
+// 4. Ciclo de vida y versionado de contratos (CUS-04A)
+const createContractDocumentSchema = z.object({
+  leaseId: z.string().uuid(),
+  title: z.string().min(3),
+  content: z.string().min(10),
+  fileUrl: z.string().optional(),
+})
+
+export async function createContractDocumentAction(input: z.infer<typeof createContractDocumentSchema>) {
+  return safeAction(createContractDocumentSchema, input, async (data, tenantId) => {
+    const { contractLifecycleService } = await import("@/lib/services/contract-lifecycle-service")
+    const doc = await contractLifecycleService.createDocument({
+      tenantId,
+      leaseId: data.leaseId,
+      title: data.title,
+      content: data.content,
+      fileUrl: data.fileUrl,
+    })
+
+    revalidatePath("/rentas")
+    return { document: doc }
+  })
+}
+
+// 5. Firma electrónica con trazabilidad (CUS-04B)
+const completeSignatureSchema = z.object({
+  token: z.string(),
+  ipAddress: z.string().default("127.0.0.1"),
+  userAgent: z.string().default("Custodia Portal"),
+  handwrittenBase64: z.string().optional(),
+})
+
+export async function completeSignatureAction(input: z.infer<typeof completeSignatureSchema>) {
+  return safeAction(completeSignatureSchema, input, async (data) => {
+    const { contractLifecycleService } = await import("@/lib/services/contract-lifecycle-service")
+    const result = await contractLifecycleService.completeSignature({
+      token: data.token,
+      ipAddress: data.ipAddress,
+      userAgent: data.userAgent,
+      handwrittenBase64: data.handwrittenBase64,
+    })
+
+    revalidatePath("/rentas")
+    revalidatePath("/inquilino")
+    return result
+  })
+}
+
+// 6. Registro de inspección Move-in/Move-out (CUS-04C)
+const createInspectionSchema = z.object({
+  propertyId: z.string().uuid(),
+  leaseId: z.string().uuid().optional(),
+  type: z.enum(["MOVE_IN", "MOVE_OUT", "ROUTINE"]),
+  inspectorName: z.string(),
+  summaryNotes: z.string().optional(),
+  zones: z.array(z.object({
+    zoneName: z.string(),
+    items: z.array(z.object({
+      name: z.string(),
+      condition: z.enum(["EXCELLENT", "GOOD", "FAIR", "DAMAGED", "MISSING"]),
+      notes: z.string().optional(),
+      photoUrl: z.string().optional(),
+    }))
+  })).min(1),
+})
+
+export async function createInspectionAction(input: z.infer<typeof createInspectionSchema>) {
+  return safeAction(createInspectionSchema, input, async (data, tenantId) => {
+    const { inspectionService } = await import("@/lib/services/inspection-service")
+    const inspection = await inspectionService.createInspection({
+      tenantId,
+      propertyId: data.propertyId,
+      leaseId: data.leaseId,
+      type: data.type,
+      inspectorName: data.inspectorName,
+      summaryNotes: data.summaryNotes,
+      zones: data.zones as any,
+    })
+
+    revalidatePath(`/propiedades/${data.propertyId}`)
+    return { inspection }
+  })
+}
+
