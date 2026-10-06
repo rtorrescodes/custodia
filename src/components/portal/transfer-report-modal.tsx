@@ -28,7 +28,7 @@ export function TransferReportModal({
 }: TransferReportModalProps) {
   const [reference, setReference] = useState("")
   const [transferDate, setTransferDate] = useState(() => new Date().toISOString().split("T")[0])
-  const [reportedAmount, setReportedAmount] = useState(() => contribution ? String(contribution.monto) : "")
+  const [reportedAmount, setReportedAmount] = useState("")
   const [notes, setNotes] = useState("")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileBase64, setFileBase64] = useState<string | null>(null)
@@ -38,7 +38,7 @@ export function TransferReportModal({
 
   // Sincronizar estado cuando se abre o cambia la aportación
   useEffect(() => {
-    if (contribution) {
+    if (contribution && isOpen) {
       setReportedAmount(String(contribution.monto))
       setTransferDate(new Date().toISOString().split("T")[0])
       setErrorMessage(null)
@@ -48,9 +48,7 @@ export function TransferReportModal({
   if (!isOpen || !contribution) return null
 
   const requestedAmount = contribution.monto
-  const effectiveReported = reportedAmount || (contribution ? String(contribution.monto) : "")
-  const effectiveDate = transferDate || new Date().toISOString().split("T")[0]
-  const currentReportedNum = parseFloat(effectiveReported || "0") || 0
+  const currentReportedNum = parseFloat(reportedAmount || "0") || 0
   const discrepancy = currentReportedNum !== requestedAmount
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -95,7 +93,7 @@ export function TransferReportModal({
       return
     }
 
-    const numToSubmit = parseFloat(effectiveReported) || 0
+    const numToSubmit = parseFloat(reportedAmount) || 0
     if (numToSubmit <= 0) {
       setErrorMessage("El importe reportado debe ser mayor a 0.")
       return
@@ -108,7 +106,7 @@ export function TransferReportModal({
       const res = await reportOwnerContributionAction({
         contributionId: contribution.id,
         reference: reference.trim(),
-        transferDate: effectiveDate,
+        transferDate: transferDate || new Date().toISOString().split("T")[0],
         reportedAmount: numToSubmit,
         reportedCurrency: contribution.moneda,
         notes: notes.trim() || undefined,
@@ -229,7 +227,7 @@ export function TransferReportModal({
                 <Input
                   type="date"
                   required
-                  value={effectiveDate}
+                  value={transferDate}
                   onChange={(e) => setTransferDate(e.target.value)}
                   className="h-9 text-xs"
                 />
@@ -246,7 +244,7 @@ export function TransferReportModal({
                   step="any"
                   required
                   placeholder={String(requestedAmount)}
-                  value={effectiveReported}
+                  value={reportedAmount}
                   onChange={(e) => setReportedAmount(e.target.value)}
                   className="h-9 text-xs font-mono"
                 />

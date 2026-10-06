@@ -32,6 +32,8 @@ async function runPersistentFinancialCycleSuite() {
   let testQuoteId: string | null = null;
   let testContributionId: string | null = null;
   let setupEscrowEntryId: string | null = null;
+  let refPartial = "";
+  let refFinal = "";
 
   try {
     // ---------------------------------------------------------------------------
@@ -290,6 +292,10 @@ async function runPersistentFinancialCycleSuite() {
     // ---------------------------------------------------------------------------
     // E & F. PAGO PARCIAL Y FINIQUITO VÍA propertyOperationsService.recordVendorPayment
     // ---------------------------------------------------------------------------
+    const runUid = Date.now().toString().slice(-6);
+    refPartial = `SPEI-PROV-MAT-${runUid}`;
+    refFinal = `SPEI-PROV-FIN-${runUid}`;
+
     const pay1Amount = Math.floor(requiredOrderCost * 0.4);
     const pay2Amount = requiredOrderCost - pay1Amount;
     console.log(`\nPaso F1: Registrando pago parcial a proveedor ($${pay1Amount} MXN) vía servicio real...`);
@@ -300,7 +306,7 @@ async function runPersistentFinancialCycleSuite() {
         workOrderId: testWorkOrderId!,
         amount: pay1Amount,
         isFinalPayment: false,
-        reference: "SPEI-PROV-MAT-001",
+        reference: refPartial,
         notes: "Anticipo de compra de impermeabilizante"
       }
     );
@@ -332,7 +338,7 @@ async function runPersistentFinancialCycleSuite() {
         workOrderId: testWorkOrderId!,
         amount: pay2Amount,
         isFinalPayment: true,
-        reference: "SPEI-PROV-FIN-002",
+        reference: refFinal,
         notes: "Liquidación final por terminación de obra"
       }
     );
@@ -447,6 +453,43 @@ async function runPersistentFinancialCycleSuite() {
     assert.strictEqual(countEntries, 1, "Solo debe existir un registro con esa idempotencyKey");
     console.log("✅ Paso H verificado: Idempotencia persistente en base de datos previene duplicaciones.");
 
+    // Paso H2: Comprobar deduplicación conjunta en recordVendorPayment
+    console.log("\nPaso H2: Probando reintento de pago a proveedor con misma referencia (idempotencia en recordVendorPayment)...");
+    const duplicateVendorPay = await propertyOperationsService.recordVendorPayment(
+      TENANT_ID,
+      PM_USER_ID,
+      {
+        workOrderId: testWorkOrderId!,
+        amount: pay1Amount,
+        isFinalPayment: false,
+        reference: refPartial,
+      }
+    );
+    assert.strictEqual(duplicateVendorPay.idempotentSkip, true, "El reintento con misma referencia debe detectarse como idempotente");
+    assert.strictEqual(duplicateVendorPay.paidAmount, pay1Amount, "Monto pagado reportado debe ser idéntico");
+    console.log("✅ Paso H2 verificado: Reintento de pago a proveedor no duplicó asiento ni transacción.");
+
+    // Probar rechazo ante misma referencia pero importe diferente
+    let conflictCaught = false;
+    try {
+      await propertyOperationsService.recordVendorPayment(
+        TENANT_ID,
+        PM_USER_ID,
+        {
+          workOrderId: testWorkOrderId!,
+          amount: pay1Amount + 1000, // diferente monto
+          isFinalPayment: false,
+          reference: refPartial,
+        }
+      );
+    } catch (e: any) {
+      if (e.message.includes("Conflicto de idempotencia")) {
+        conflictCaught = true;
+      }
+    }
+    assert.strictEqual(conflictCaught, true, "Debe rechazar con error si la referencia ya existe con diferente monto");
+    console.log("✅ Paso H2b verificado: Conflicto de importe en misma referencia rechazado correctamente.");
+
     console.log("\n================================================================================");
     console.log("🎉 SUITE DE CICLO FINANCIERO PERSISTENTE PASADA EXITOSAMENTE EN POSTGRESQL REAL");
     console.log("================================================================================\n");
@@ -462,8 +505,8 @@ async function runPersistentFinancialCycleSuite() {
           entry: {
             idempotencyKey: { in: [
               `owner-contrib-${testContributionId}`,
-              `vendor-pay-wo-${testWorkOrderId}-SPEI-PROV-MAT-001`,
-              `vendor-pay-wo-${testWorkOrderId}-SPEI-PROV-FIN-002`
+              `vendor-pay-wo-${testWorkOrderId}-${refPartial}`,
+              `vendor-pay-wo-${testWorkOrderId}-${refFinal}`
             ]}
           }
         }
@@ -472,8 +515,8 @@ async function runPersistentFinancialCycleSuite() {
         where: {
           idempotencyKey: { in: [
             `owner-contrib-${testContributionId}`,
-            `vendor-pay-wo-${testWorkOrderId}-SPEI-PROV-MAT-001`,
-            `vendor-pay-wo-${testWorkOrderId}-SPEI-PROV-FIN-002`
+            `vendor-pay-wo-${testWorkOrderId}-${refPartial}`,
+            `vendor-pay-wo-${testWorkOrderId}-${refFinal}`
           ]}
         }
       });
@@ -496,6 +539,7 @@ async function runPersistentFinancialCycleSuite() {
       await prisma.workOrder.delete({ where: { id: testWorkOrderId } }).catch(() => {});
     }
     await prisma.$disconnect();
+    process.exit(0);
   }
 }
 

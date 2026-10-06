@@ -277,7 +277,9 @@ async function runRealPgConcurrencySuite() {
   }
 }
 
-runRealPgConcurrencySuite().catch((err) => {
+runRealPgConcurrencySuite().then(() => {
+  process.exit(0);
+}).catch((err) => {
   console.error("❌ ERROR EN SUITE DE CONCURRENCIA:", err);
   process.exit(1);
 });

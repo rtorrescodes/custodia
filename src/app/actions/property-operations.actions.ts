@@ -342,6 +342,21 @@ export async function cancelWorkOrderAction(data: z.infer<typeof cancelWorkOrder
     return propertyOperationsService.cancelWorkOrder(tenantId, userId, input);
   });
 }
+
+// -------------------------------------------------------------
+// 7C. Iniciar Orden de Trabajo Fondeada (Validación Transaccional de Saldo)
+// -------------------------------------------------------------
+const startWorkOrderSchema = z.object({
+  workOrderId: z.string().uuid(),
+  notes: z.string().optional(),
+})
+
+export async function startWorkOrderAction(data: z.infer<typeof startWorkOrderSchema>) {
+  return safeAction(startWorkOrderSchema, data, async (input, tenantId, userId) => {
+    return propertyOperationsService.startWorkOrder(tenantId, userId, input);
+  });
+}
+
 // 7B. Registrar Pago a Proveedor (Liquidación en Ledger Contable)
 // -------------------------------------------------------------
 const recordVendorPaymentSchema = z.object({

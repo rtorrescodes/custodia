@@ -69,6 +69,19 @@ export const propertyOperationsService = {
         FOR UPDATE
       `;
 
+      // Re-leer la orden de trabajo tras adquirir el bloqueo
+      const currentWo = await tx.workOrder.findUnique({
+        where: { id: quote.workOrderId, tenantId }
+      });
+      if (!currentWo) throw new Error("Orden de trabajo no encontrada tras bloqueo.");
+
+      if (currentWo.status === "COMPLETED") {
+        throw new Error("No se puede aprobar una cotización en una orden ya completada.");
+      }
+      if (currentWo.status === "CANCELLED") {
+        throw new Error("No se puede aprobar una cotización en una orden cancelada.");
+      }
+
       const totalCost = Number(quote.totalCost);
 
       // 2. Comprobación fiduciaria en la transacción bloqueada
@@ -94,13 +107,14 @@ export const propertyOperationsService = {
       const deficitAmount = hasSufficientFunds ? 0 : (totalCost - Math.max(0, availableFunds));
       const newWOStatus = hasSufficientFunds ? "IN_PROGRESS" : "AWAITING_APPROVAL";
 
-      // 4. Actualizar orden de trabajo con el presupuesto aprobado (estimatedCost)
+      // 4. Actualizar orden de trabajo con el presupuesto aprobado (estimatedCost) sin resetear pagos acumulados previos
+      const preservedActualCost = currentWo.actualCost !== null ? currentWo.actualCost : 0;
       await tx.workOrder.update({
         where: { id: quote.workOrderId },
         data: {
           status: newWOStatus,
           estimatedCost: quote.totalCost,
-          actualCost: 0,
+          actualCost: preservedActualCost,
         }
       });
 
@@ -307,6 +321,32 @@ export const propertyOperationsService = {
     },
     externalTx?: any
   ) {
+    // Subida previa y segura fuera de la transacción para poder compensar si falla la DB
+    let newStoragePath: string | null = input.storagePath || null;
+    let uploadedHere = false;
+
+    if (input.fileBuffer && input.fileName && input.fileMimeType) {
+      const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
+      const targetContribution = await prisma.ownerContribution.findUnique({
+        where: { id: input.contributionId, tenantId },
+        select: { propertyId: true }
+      });
+      if (!targetContribution) {
+        throw new Error("Solicitud de aportación no encontrada");
+      }
+      const uploadResult = await evidenceStorageService.uploadFile({
+        tenantId,
+        propertyId: targetContribution.propertyId,
+        filename: input.fileName,
+        buffer: input.fileBuffer,
+        mimeType: input.fileMimeType,
+      });
+      newStoragePath = uploadResult.path;
+      uploadedHere = true;
+    }
+
+    let previousEvidenceToDelete: string | null = null;
+
     const runInTx = async (tx: any) => {
       const contribution = await tx.ownerContribution.findUnique({
         where: { id: input.contributionId, tenantId },
@@ -321,20 +361,6 @@ export const propertyOperationsService = {
       }
 
       const previousEvidence = contribution.evidenceUrl;
-      let newStoragePath: string | null = input.storagePath || null;
-
-      // Subida de comprobante si se pasó buffer directamente
-      if (input.fileBuffer && input.fileName && input.fileMimeType) {
-        const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
-        const uploadResult = await evidenceStorageService.uploadFile({
-          tenantId,
-          propertyId: contribution.propertyId,
-          filename: input.fileName,
-          buffer: input.fileBuffer,
-          mimeType: input.fileMimeType,
-        });
-        newStoragePath = uploadResult.path;
-      }
 
       const requestedAmt = Number(contribution.amount);
       const diff = input.reportedAmount - requestedAmt;
@@ -362,8 +388,7 @@ export const propertyOperationsService = {
       });
 
       if (newStoragePath && previousEvidence && previousEvidence !== newStoragePath) {
-        const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
-        await evidenceStorageService.deleteFile(previousEvidence).catch(() => {});
+        previousEvidenceToDelete = previousEvidence;
       }
 
       return {
@@ -380,10 +405,26 @@ export const propertyOperationsService = {
       };
     };
 
-    if (externalTx) {
-      return runInTx(externalTx);
+    try {
+      const result = externalTx
+        ? await runInTx(externalTx)
+        : await withTenantRLS(tenantId, runInTx);
+
+      // Si la transacción tuvo éxito y había un archivo anterior reemplazado, eliminar el viejo
+      if (previousEvidenceToDelete) {
+        const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
+        await evidenceStorageService.deleteFile(previousEvidenceToDelete).catch(() => {});
+      }
+
+      return result;
+    } catch (err) {
+      // Compensación: Si falló la transacción en BD y habíamos subido un archivo nuevo en esta llamada, limpiarlo
+      if (uploadedHere && newStoragePath) {
+        const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
+        await evidenceStorageService.deleteFile(newStoragePath).catch(() => {});
+      }
+      throw err;
     }
-    return withTenantRLS(tenantId, runInTx);
   },
 
   /**
@@ -493,15 +534,51 @@ export const propertyOperationsService = {
         FOR UPDATE
       `;
 
-      const fiduciary = await accountingService.getPropertyFiduciarySummary(tenantId, wo.propertyId, tx);
+      // Re-leer la orden de trabajo tras adquirir el bloqueo
+      const currentWo = await tx.workOrder.findUnique({
+        where: { id: input.workOrderId, tenantId }
+      });
+      if (!currentWo) throw new Error("Orden de trabajo no encontrada tras bloqueo.");
+
+      // Idempotencia conjunta: verificar si ya existe una transacción de pago registrada con esta referencia para ESTA orden
+      const existingTx = await tx.transaction.findFirst({
+        where: {
+          tenantId,
+          propertyId: currentWo.propertyId,
+          description: { contains: `${currentWo.title} (Ref: ${input.reference})` }
+        }
+      });
+
+      if (existingTx) {
+        const existingAmount = Number(existingTx.amount);
+        if (Math.abs(existingAmount - input.amount) > 0.01) {
+          throw new Error(
+            `Conflicto de idempotencia: La referencia de pago '${input.reference}' ya fue registrada previamente con un importe diferente ($${existingAmount} vs $${input.amount}).`
+          );
+        }
+        // Retornar resultado idempotente sin volver a duplicar asiento, transacción ni sumar actualCost
+        return {
+          workOrderId: currentWo.id,
+          paidAmount: existingAmount,
+          totalPaidSoFar: Number(currentWo.actualCost || 0),
+          isCompleted: currentWo.status === "COMPLETED",
+          status: currentWo.status,
+          journalEntryId: `idempotent-skip-${input.reference}`,
+          reference: input.reference,
+          paidToVendor: true,
+          idempotentSkip: true,
+        };
+      }
+
+      const fiduciary = await accountingService.getPropertyFiduciarySummary(tenantId, currentWo.propertyId, tx);
       if (fiduciary.custodiaPmEfectiva < input.amount) {
         throw new Error(
           `Fondos insuficientes en custodia PM para emitir pago (${fiduciary.custodiaPmEfectiva} < ${input.amount}). Requiere aportación previa.`
         );
       }
 
-      const previousPaid = Number(wo.actualCost || 0);
-      const estimated = Number(wo.estimatedCost || 0);
+      const previousPaid = Number(currentWo.actualCost || 0);
+      const estimated = Number(currentWo.estimatedCost || 0);
       const remainingCommitmentForThisOrder = Math.max(0, estimated - previousPaid);
       const effectiveAvailableForThisWO = fiduciary.disponibleNuevasObligaciones + remainingCommitmentForThisOrder;
 
@@ -515,12 +592,12 @@ export const propertyOperationsService = {
       const accounts = await accountingService.ensureStandardChartOfAccounts(tenantId, tx);
 
       // Partida doble con idempotencia
-      const idempotencyKey = `vendor-pay-wo-${wo.id}-${input.reference}`;
+      const idempotencyKey = `vendor-pay-wo-${currentWo.id}-${input.reference}`;
       const entry = await accountingService.postEntry({
         tenantId,
         idempotencyKey,
         effectiveDate: now,
-        description: `Pago a proveedor por orden de trabajo ${wo.title}: Ref ${input.reference}${input.isFinalPayment ? " (Finiquito)" : " (Anticipo/Parcial)"}`,
+        description: `Pago a proveedor por orden de trabajo ${currentWo.title}: Ref ${input.reference}${input.isFinalPayment ? " (Finiquito)" : " (Anticipo/Parcial)"}`,
         createdById: userId,
         lines: [
           {
@@ -528,14 +605,14 @@ export const propertyOperationsService = {
             debit: input.amount,
             credit: 0,
             currency: "MXN",
-            propertyId: wo.propertyId,
+            propertyId: currentWo.propertyId,
           },
           {
             accountId: accounts.cashPmEscrow,
             debit: 0,
             credit: input.amount,
             currency: "MXN",
-            propertyId: wo.propertyId,
+            propertyId: currentWo.propertyId,
           }
         ]
       }, tx);
@@ -544,12 +621,12 @@ export const propertyOperationsService = {
       await tx.transaction.create({
         data: {
           tenantId,
-          propertyId: wo.propertyId,
+          propertyId: currentWo.propertyId,
           type: "EXPENSE",
           category: "MANTENIMIENTO",
           amount: input.amount,
           currency: "MXN",
-          description: `Pago a proveedor: ${wo.title} (Ref: ${input.reference})`,
+          description: `Pago a proveedor: ${currentWo.title} (Ref: ${input.reference})`,
           createdAt: now,
         }
       });
@@ -559,7 +636,7 @@ export const propertyOperationsService = {
       const newStatus = isCompleted ? "COMPLETED" : "IN_PROGRESS";
 
       await tx.workOrder.update({
-        where: { id: wo.id },
+        where: { id: currentWo.id },
         data: {
           actualCost: newAccumulatedCost,
           status: newStatus,
@@ -567,7 +644,7 @@ export const propertyOperationsService = {
       });
 
       return {
-        workOrderId: wo.id,
+        workOrderId: currentWo.id,
         paidAmount: input.amount,
         totalPaidSoFar: newAccumulatedCost,
         isCompleted,

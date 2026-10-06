@@ -250,7 +250,9 @@ async function runEvidenceAuthorizationSuite() {
   }
 }
 
-runEvidenceAuthorizationSuite().catch((err) => {
+runEvidenceAuthorizationSuite().then(() => {
+  process.exit(0);
+}).catch((err) => {
   console.error("❌ ERROR EN SUITE DE AUTORIZACIÓN DE EVIDENCIA:", err);
   process.exit(1);
 });

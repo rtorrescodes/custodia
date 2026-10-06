@@ -358,8 +358,12 @@ export async function getPropertyData(propertyId: string, requestedTenantId?: st
       aportacionesDueño: ownerContributions.map(c => ({
         id: c.id,
         monto: Number(c.amount),
+        montoReportado: c.reportedAmount !== null ? Number(c.reportedAmount) : null,
+        montoVerificado: c.verifiedAmount !== null ? Number(c.verifiedAmount) : null,
+        referencia: c.reference || null,
         moneda: c.currency,
         motivo: c.reason,
+        notas: c.notes || null,
         estado: c.status,
         solicitadoEn: c.requestedAt.toISOString(),
         reportadoEn: c.reportedAt?.toISOString() || null,

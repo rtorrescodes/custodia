@@ -37,6 +37,9 @@ import {
   configurePmExpensePolicyAction,
   recordSupplyMovementAction,
   recordVendorPaymentAction,
+  startWorkOrderAction,
+  verifyOwnerContributionAction,
+  getEvidenceSignedUrlAction,
 } from "@/app/actions/property-operations.actions"
 import {
   createOperationalTaskAction,
@@ -108,7 +111,117 @@ export function PropertyTabs({
   const [supplyReason, setSupplyReason] = useState("");
   const [loadingSupply, setLoadingSupply] = useState(false);
 
-  // Handlers
+  // Estado de Aportaciones
+  const [contributions, setContributions] = useState(property.aportacionesDueño || []);
+  const [verifyingContribId, setVerifyingContribId] = useState<string | null>(null);
+  const [confirmedAmounts, setConfirmedAmounts] = useState<Record<string, string>>({});
+  const [verifyingLoading, setVerifyingLoading] = useState<Record<string, boolean>>({});
+
+  // Estado de Tareas Operativas
+  const [tasks, setTasks] = useState(property.tareasOperativas || []);
+  const [taskEvidenceNotes, setTaskEvidenceNotes] = useState<Record<string, string>>({});
+  const [taskReviewNotes, setTaskReviewNotes] = useState<Record<string, string>>({});
+  const [taskActionLoading, setTaskActionLoading] = useState<Record<string, boolean>>({});
+
+  // Handlers para Aportaciones y Órdenes
+  async function handleOpenEvidence(contribId: string) {
+    const res = await getEvidenceSignedUrlAction({ contributionId: contribId });
+    if (res.success && res.data?.signedUrl) {
+      window.open(res.data.signedUrl, "_blank");
+    } else {
+      alert("No se pudo obtener el comprobante: " + (res.error || "Archivo no disponible"));
+    }
+  }
+
+  async function handleVerifyContribution(contribId: string) {
+    const amtStr = confirmedAmounts[contribId];
+    const amt = amtStr ? parseFloat(amtStr) : undefined;
+    setVerifyingLoading({ ...verifyingLoading, [contribId]: true });
+    try {
+      const res = await verifyOwnerContributionAction({
+        contributionId: contribId,
+        verifiedAmount: amt,
+        notes: "Verificado formalmente por PM desde interfaz de administración",
+      });
+      if (res.success && res.data) {
+        setContributions(contributions.map((c: any) => c.id === contribId ? { ...c, estado: "VERIFIED", montoVerificado: res.data?.releasedAmount } : c));
+        alert("¡Aportación verificada y fondos liberados exitosamente!");
+      } else {
+        alert("Error al verificar: " + (res.error || "No se pudo verificar"));
+      }
+    } finally {
+      setVerifyingLoading({ ...verifyingLoading, [contribId]: false });
+    }
+  }
+
+  async function handleStartWorkOrder(workOrderId: string) {
+    const res = await startWorkOrderAction({ workOrderId });
+    if (res.success && res.data) {
+      setOrders(orders.map((o: any) => o.id === workOrderId ? { ...o, estado: "IN_PROGRESS" } : o));
+      alert("¡Orden de trabajo iniciada con fondos fiduciarios asegurados!");
+    } else {
+      alert("No se pudo iniciar la orden: " + (res.error || "Fondos insuficientes"));
+    }
+  }
+
+  async function handleRequestTaskVerification(taskId: string) {
+    const notes = taskEvidenceNotes[taskId];
+    if (!notes || notes.trim().length < 5) {
+      alert("Ingresa notas de evidencia de entrega (mínimo 5 caracteres).");
+      return;
+    }
+    setTaskActionLoading({ ...taskActionLoading, [taskId]: true });
+    try {
+      const res = await requestTaskVerificationAction({
+        taskId,
+        evidenceNotes: notes.trim(),
+        evidenceUrls: [],
+      });
+      if (res.success) {
+        setTasks(tasks.map((t: any) => t.id === taskId ? { ...t, estado: "VERIFICATION_PENDING" } : t));
+        alert("Entrega de tarea enviada a verificación del PM.");
+      } else {
+        alert("Error: " + (res.error || "No se pudo solicitar verificación"));
+      }
+    } finally {
+      setTaskActionLoading({ ...taskActionLoading, [taskId]: false });
+    }
+  }
+
+  async function handleResolveTaskVerification(taskId: string, approved: boolean) {
+    const notes = taskReviewNotes[taskId] || (approved ? "Aprobado por PM" : "Requiere corrección");
+    setTaskActionLoading({ ...taskActionLoading, [taskId]: true });
+    try {
+      const res = await resolveTaskVerificationAction({
+        taskId,
+        approved,
+        notes,
+      });
+      if (res.success && res.data) {
+        const newStatus = res.data.status;
+        setTasks(tasks.map((t: any) => t.id === taskId ? { ...t, estado: newStatus } : t));
+        // Si estaba ligada a una estadía, actualizar también el estado de estadías
+        setStays(stays.map((s: any) => {
+          if (s.linkedTasks && s.linkedTasks.some((lt: any) => lt.id === taskId)) {
+            const updatedLinked = s.linkedTasks.map((lt: any) => lt.id === taskId ? { ...lt, estado: newStatus } : lt);
+            const allCompleted = updatedLinked.every((lt: any) => lt.estado === "COMPLETED");
+            return {
+              ...s,
+              estado: allCompleted ? "COMPLETED" : s.estado,
+              linkedTasks: updatedLinked
+            };
+          }
+          return s;
+        }));
+        alert(approved ? "¡Verificación técnica aprobada! Tarea completada." : "Tarea devuelta al responsable para correcciones.");
+      } else {
+        alert("Error: " + (res.error || "No se pudo resolver"));
+      }
+    } finally {
+      setTaskActionLoading({ ...taskActionLoading, [taskId]: false });
+    }
+  }
+
   async function handleRecordSupplyMovement(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedSupplyId || !supplyQty || !supplyReason) return;
@@ -512,9 +625,18 @@ export function PropertyTabs({
                                 {dict.expensesTab.approveAction}
                               </Button>
                             ) : quote?.estado === "APPROVED" && (o.estado === "AWAITING_APPROVAL" || o.bloqueadoPorFondos) ? (
-                              <Badge variant="outline" className="text-amber-600 border-amber-500/30 bg-amber-500/10 font-medium">
-                                Aprobada, pendiente de fondos
-                              </Badge>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-amber-600 border-amber-500/30 bg-amber-500/10 font-medium">
+                                  Aprobada, esperando inicio
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  className="h-8 text-xs bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg"
+                                  onClick={() => handleStartWorkOrder(o.id)}
+                                >
+                                  Iniciar Orden Fondeada
+                                </Button>
+                              </div>
                             ) : quote?.estado === "APPROVED" ? (
                               <Badge variant="outline" className="text-emerald-500 border-emerald-500/30">
                                 ✓ {dict.expensesTab.approved}
@@ -528,6 +650,94 @@ export function PropertyTabs({
                         </div>
                       );
                     })
+                  )}
+                </div>
+
+                {/* Sección de Aportaciones de Propietario (Verificación PM de Recepción) */}
+                <div className="pt-4 border-t border-border space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-semibold text-sm text-foreground">Aportaciones de Propietario</h4>
+                      <p className="text-xs text-muted-foreground">Verificación de transferencias reportadas y comprobantes bancarios</p>
+                    </div>
+                    <Badge variant="outline" className="text-xs">
+                      {contributions.filter((c: any) => c.estado === "REPORTED").length} por verificar
+                    </Badge>
+                  </div>
+
+                  {contributions.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-2 text-center">No hay aportaciones registradas.</p>
+                  ) : (
+                    contributions.map((c: any) => (
+                      <div key={c.id} className="p-3 rounded-xl border border-border/80 bg-muted/20 space-y-2">
+                        <div className="flex items-start justify-between gap-2 text-xs">
+                          <div>
+                            <span className="font-semibold text-foreground">{c.motivo}</span>
+                            <div className="text-[11px] text-muted-foreground mt-0.5">
+                              <span>Solicitado: <strong>${c.monto.toLocaleString()} {c.moneda}</strong></span>
+                              {c.montoReportado && (
+                                <span className="ml-2">· Reportado: <strong className="text-primary">${c.montoReportado.toLocaleString()} {c.moneda}</strong></span>
+                              )}
+                              {c.referencia && (
+                                <span className="ml-2 font-mono">· Ref: {c.referencia}</span>
+                              )}
+                            </div>
+                            {c.notas && (
+                              <p className="text-[10px] text-muted-foreground mt-1 bg-background/50 p-1 rounded border border-border/40">
+                                {c.notas}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <Badge
+                              variant={c.estado === "VERIFIED" ? "outline" : c.estado === "REPORTED" ? "secondary" : "outline"}
+                              className={`text-[10px] ${
+                                c.estado === "VERIFIED"
+                                  ? "text-emerald-600 border-emerald-500/30 bg-emerald-500/10"
+                                  : c.estado === "REPORTED"
+                                  ? "bg-amber-500/10 text-amber-600 border-amber-500/30"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {c.estado === "VERIFIED" ? "✓ Verificada" : c.estado === "REPORTED" ? "Reportada" : "Solicitada"}
+                            </Badge>
+                          </div>
+                        </div>
+
+                        {c.estado === "REPORTED" && (
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/40 text-xs">
+                            <div className="flex items-center gap-2">
+                              {c.comprobanteUrl && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs border-primary/40 text-primary hover:bg-primary/5"
+                                  onClick={() => handleOpenEvidence(c.id)}
+                                >
+                                  Ver Comprobante
+                                </Button>
+                              )}
+                              <Input
+                                type="number"
+                                placeholder={`Importe real (${c.montoReportado || c.monto})`}
+                                value={confirmedAmounts[c.id] || ""}
+                                onChange={(e) => setConfirmedAmounts({ ...confirmedAmounts, [c.id]: e.target.value })}
+                                className="h-7 w-32 text-xs font-mono"
+                              />
+                            </div>
+                            <Button
+                              size="sm"
+                              className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
+                              disabled={verifyingLoading[c.id]}
+                              onClick={() => handleVerifyContribution(c.id)}
+                            >
+                              {verifyingLoading[c.id] ? "Verificando..." : "Confirmar Recepción"}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))
                   )}
                 </div>
               </CardContent>
@@ -1152,8 +1362,102 @@ export function PropertyTabs({
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20">
-                    Flujo: Pendiente → En Proceso → Verificación Solicitada → Aprobada
+                    Flujo: Asignada → En Proceso → Verificación Solicitada → Aprobada
                   </Badge>
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  {tasks.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-2 text-center">No hay tareas asignadas.</p>
+                  ) : (
+                    tasks.map((t: any) => (
+                      <div key={t.id} className="p-3 rounded-xl border border-border bg-card space-y-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h5 className="font-semibold text-xs text-foreground">{t.titulo}</h5>
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] ${
+                                  t.estado === "COMPLETED"
+                                    ? "text-emerald-600 border-emerald-500/30 bg-emerald-500/5"
+                                    : t.estado === "VERIFICATION_PENDING"
+                                    ? "text-amber-600 border-amber-500/30 bg-amber-500/5"
+                                    : "text-blue-600 border-blue-500/30 bg-blue-500/5"
+                                }`}
+                              >
+                                {t.estado}
+                              </Badge>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground mt-0.5">{t.descripcion}</p>
+                            <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-2">
+                              <span>Asignado: <strong>{t.assigneeName || "Sin asignar"}</strong></span>
+                              {t.fechaLimite && <span>· Límite: {new Date(t.fechaLimite).toLocaleDateString()}</span>}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Controles para operario: Reportar entrega con evidencia */}
+                        {t.estado !== "COMPLETED" && t.estado !== "VERIFICATION_PENDING" && (
+                          <div className="pt-2 border-t border-border/40 space-y-2">
+                            <label className="text-[11px] font-medium text-foreground block">
+                              Reportar entrega (Operario):
+                            </label>
+                            <div className="flex gap-2">
+                              <Input
+                                placeholder="Notas de evidencia y confirmación de entrega..."
+                                value={taskEvidenceNotes[t.id] || ""}
+                                onChange={(e) => setTaskEvidenceNotes({ ...taskEvidenceNotes, [t.id]: e.target.value })}
+                                className="h-8 text-xs"
+                              />
+                              <Button
+                                size="sm"
+                                className="h-8 text-xs shrink-0 rounded-lg"
+                                disabled={taskActionLoading[t.id]}
+                                onClick={() => handleRequestTaskVerification(t.id)}
+                              >
+                                {taskActionLoading[t.id] ? "Enviando..." : "Solicitar Verificación"}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Controles para PM: Resolver Verificación */}
+                        {t.estado === "VERIFICATION_PENDING" && (
+                          <div className="pt-2 border-t border-border/40 space-y-2 bg-amber-500/5 p-2 rounded-lg">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-amber-600">Revisión de Entrega (PM):</span>
+                            </div>
+                            <Input
+                              placeholder="Notas de dictamen técnico..."
+                              value={taskReviewNotes[t.id] || ""}
+                              onChange={(e) => setTaskReviewNotes({ ...taskReviewNotes, [t.id]: e.target.value })}
+                              className="h-8 text-xs bg-background"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs border-destructive/40 text-destructive hover:bg-destructive/5 rounded-lg"
+                                disabled={taskActionLoading[t.id]}
+                                onClick={() => handleResolveTaskVerification(t.id, false)}
+                              >
+                                Devolver Corrección
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg"
+                                disabled={taskActionLoading[t.id]}
+                                onClick={() => handleResolveTaskVerification(t.id, true)}
+                              >
+                                Aprobar Verificación
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
                 </div>
               </CardContent>
             </Card>

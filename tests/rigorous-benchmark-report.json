@@ -2,29 +2,29 @@
   "summaryReport": [
     {
       "Ruta": "Ficha Inmueble (Villa Serena)",
-      "Mediana Total": "233 ms",
-      "Rango Total": "200ms - 254ms",
-      "Promedio Total": "227 ms",
+      "Mediana Total": "199 ms",
+      "Rango Total": "193ms - 203ms",
+      "Promedio Total": "198 ms",
       "Mediana TTFB": "5 ms",
-      "Rango TTFB": "4ms - 7ms",
+      "Rango TTFB": "5ms - 6ms",
       "Muestras Válidas": 5
     },
     {
       "Ruta": "Cartera PM (Bandeja Multipropiedad)",
-      "Mediana Total": "224 ms",
-      "Rango Total": "198ms - 311ms",
-      "Promedio Total": "245 ms",
+      "Mediana Total": "199 ms",
+      "Rango Total": "195ms - 201ms",
+      "Promedio Total": "198 ms",
       "Mediana TTFB": "5 ms",
-      "Rango TTFB": "4ms - 5ms",
+      "Rango TTFB": "5ms - 6ms",
       "Muestras Válidas": 5
     },
     {
       "Ruta": "Portal Propietario (Liquidaciones y Fideicomiso)",
-      "Mediana Total": "188 ms",
-      "Rango Total": "168ms - 215ms",
-      "Promedio Total": "192 ms",
-      "Mediana TTFB": "154 ms",
-      "Rango TTFB": "133ms - 173ms",
+      "Mediana Total": "171 ms",
+      "Rango Total": "168ms - 176ms",
+      "Promedio Total": "172 ms",
+      "Mediana TTFB": "136 ms",
+      "Rango TTFB": "131ms - 139ms",
       "Muestras Válidas": 5
     }
   ],
@@ -35,9 +35,9 @@
         "iteration": 1,
         "isWarmup": false,
         "httpStatus": 304,
-        "ttfbMs": 5,
-        "usableContentMs": 254,
-        "totalMs": 254
+        "ttfbMs": 6,
+        "usableContentMs": 201,
+        "totalMs": 201
       },
       {
         "route": "Ficha Inmueble (Villa Serena)",
@@ -45,35 +45,35 @@
         "isWarmup": false,
         "httpStatus": 304,
         "ttfbMs": 5,
-        "usableContentMs": 244,
-        "totalMs": 244
+        "usableContentMs": 194,
+        "totalMs": 194
       },
       {
         "route": "Ficha Inmueble (Villa Serena)",
         "iteration": 3,
         "isWarmup": false,
         "httpStatus": 304,
-        "ttfbMs": 7,
-        "usableContentMs": 205,
-        "totalMs": 205
+        "ttfbMs": 5,
+        "usableContentMs": 199,
+        "totalMs": 199
       },
       {
         "route": "Ficha Inmueble (Villa Serena)",
         "iteration": 4,
         "isWarmup": false,
         "httpStatus": 304,
-        "ttfbMs": 4,
-        "usableContentMs": 200,
-        "totalMs": 200
+        "ttfbMs": 6,
+        "usableContentMs": 203,
+        "totalMs": 203
       },
       {
         "route": "Ficha Inmueble (Villa Serena)",
         "iteration": 5,
         "isWarmup": false,
         "httpStatus": 304,
-        "ttfbMs": 6,
-        "usableContentMs": 233,
-        "totalMs": 233
+        "ttfbMs": 5,
+        "usableContentMs": 193,
+        "totalMs": 193
       }
     ],
     "Cartera PM (Bandeja Multipropiedad)": [
@@ -82,9 +82,9 @@
         "iteration": 1,
         "isWarmup": false,
         "httpStatus": 304,
-        "ttfbMs": 5,
-        "usableContentMs": 289,
-        "totalMs": 289
+        "ttfbMs": 6,
+        "usableContentMs": 195,
+        "totalMs": 195
       },
       {
         "route": "Cartera PM (Bandeja Multipropiedad)",
@@ -92,17 +92,17 @@
         "isWarmup": false,
         "httpStatus": 304,
         "ttfbMs": 5,
-        "usableContentMs": 224,
-        "totalMs": 224
+        "usableContentMs": 197,
+        "totalMs": 197
       },
       {
         "route": "Cartera PM (Bandeja Multipropiedad)",
         "iteration": 3,
         "isWarmup": false,
         "httpStatus": 304,
-        "ttfbMs": 4,
-        "usableContentMs": 201,
-        "totalMs": 201
+        "ttfbMs": 5,
+        "usableContentMs": 200,
+        "totalMs": 200
       },
       {
         "route": "Cartera PM (Bandeja Multipropiedad)",
@@ -110,8 +110,8 @@
         "isWarmup": false,
         "httpStatus": 304,
         "ttfbMs": 5,
-        "usableContentMs": 311,
-        "totalMs": 311
+        "usableContentMs": 201,
+        "totalMs": 201
       },
       {
         "route": "Cartera PM (Bandeja Multipropiedad)",
@@ -119,8 +119,8 @@
         "isWarmup": false,
         "httpStatus": 304,
         "ttfbMs": 5,
-        "usableContentMs": 198,
-        "totalMs": 198
+        "usableContentMs": 199,
+        "totalMs": 199
       }
     ],
     "Portal Propietario (Liquidaciones y Fideicomiso)": [
@@ -129,45 +129,45 @@
         "iteration": 1,
         "isWarmup": false,
         "httpStatus": 200,
-        "ttfbMs": 133,
-        "usableContentMs": 168,
-        "totalMs": 168
+        "ttfbMs": 138,
+        "usableContentMs": 176,
+        "totalMs": 176
       },
       {
         "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
         "iteration": 2,
         "isWarmup": false,
         "httpStatus": 200,
-        "ttfbMs": 140,
-        "usableContentMs": 185,
-        "totalMs": 185
+        "ttfbMs": 136,
+        "usableContentMs": 170,
+        "totalMs": 170
       },
       {
         "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
         "iteration": 3,
         "isWarmup": false,
         "httpStatus": 200,
-        "ttfbMs": 165,
-        "usableContentMs": 204,
-        "totalMs": 204
+        "ttfbMs": 139,
+        "usableContentMs": 176,
+        "totalMs": 176
       },
       {
         "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
         "iteration": 4,
         "isWarmup": false,
         "httpStatus": 200,
-        "ttfbMs": 173,
-        "usableContentMs": 215,
-        "totalMs": 215
+        "ttfbMs": 131,
+        "usableContentMs": 168,
+        "totalMs": 168
       },
       {
         "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
         "iteration": 5,
         "isWarmup": false,
         "httpStatus": 200,
-        "ttfbMs": 154,
-        "usableContentMs": 188,
-        "totalMs": 188
+        "ttfbMs": 136,
+        "usableContentMs": 171,
+        "totalMs": 171
       }
     ]
   }
