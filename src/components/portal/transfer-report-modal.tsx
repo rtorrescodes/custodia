@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -27,12 +27,8 @@ export function TransferReportModal({
   onSuccess,
 }: TransferReportModalProps) {
   const [reference, setReference] = useState("")
-  const [transferDate, setTransferDate] = useState(
-    new Date().toISOString().split("T")[0]
-  )
-  const [reportedAmount, setReportedAmount] = useState(
-    contribution ? String(contribution.monto) : ""
-  )
+  const [transferDate, setTransferDate] = useState(() => new Date().toISOString().split("T")[0])
+  const [reportedAmount, setReportedAmount] = useState(() => contribution ? String(contribution.monto) : "")
   const [notes, setNotes] = useState("")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileBase64, setFileBase64] = useState<string | null>(null)
@@ -40,10 +36,21 @@ export function TransferReportModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [successInfo, setSuccessInfo] = useState<string | null>(null)
 
+  // Sincronizar estado cuando se abre o cambia la aportación
+  useEffect(() => {
+    if (contribution) {
+      setReportedAmount(String(contribution.monto))
+      setTransferDate(new Date().toISOString().split("T")[0])
+      setErrorMessage(null)
+    }
+  }, [contribution?.id, contribution?.monto, isOpen])
+
   if (!isOpen || !contribution) return null
 
   const requestedAmount = contribution.monto
-  const currentReportedNum = parseFloat(reportedAmount) || 0
+  const effectiveReported = reportedAmount || (contribution ? String(contribution.monto) : "")
+  const effectiveDate = transferDate || new Date().toISOString().split("T")[0]
+  const currentReportedNum = parseFloat(effectiveReported || "0") || 0
   const discrepancy = currentReportedNum !== requestedAmount
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -87,7 +94,9 @@ export function TransferReportModal({
       setErrorMessage("La referencia o folio SPEI es obligatoria.")
       return
     }
-    if (currentReportedNum <= 0) {
+
+    const numToSubmit = parseFloat(effectiveReported) || 0
+    if (numToSubmit <= 0) {
       setErrorMessage("El importe reportado debe ser mayor a 0.")
       return
     }
@@ -99,8 +108,8 @@ export function TransferReportModal({
       const res = await reportOwnerContributionAction({
         contributionId: contribution.id,
         reference: reference.trim(),
-        transferDate,
-        reportedAmount: currentReportedNum,
+        transferDate: effectiveDate,
+        reportedAmount: numToSubmit,
         reportedCurrency: contribution.moneda,
         notes: notes.trim() || undefined,
         fileBase64: fileBase64 || undefined,
@@ -220,7 +229,7 @@ export function TransferReportModal({
                 <Input
                   type="date"
                   required
-                  value={transferDate}
+                  value={effectiveDate}
                   onChange={(e) => setTransferDate(e.target.value)}
                   className="h-9 text-xs"
                 />
@@ -237,7 +246,7 @@ export function TransferReportModal({
                   step="any"
                   required
                   placeholder={String(requestedAmount)}
-                  value={reportedAmount}
+                  value={effectiveReported}
                   onChange={(e) => setReportedAmount(e.target.value)}
                   className="h-9 text-xs font-mono"
                 />

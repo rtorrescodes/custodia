@@ -1,0 +1,174 @@
+{
+  "summaryReport": [
+    {
+      "Ruta": "Ficha Inmueble (Villa Serena)",
+      "Mediana Total": "233 ms",
+      "Rango Total": "200ms - 254ms",
+      "Promedio Total": "227 ms",
+      "Mediana TTFB": "5 ms",
+      "Rango TTFB": "4ms - 7ms",
+      "Muestras Válidas": 5
+    },
+    {
+      "Ruta": "Cartera PM (Bandeja Multipropiedad)",
+      "Mediana Total": "224 ms",
+      "Rango Total": "198ms - 311ms",
+      "Promedio Total": "245 ms",
+      "Mediana TTFB": "5 ms",
+      "Rango TTFB": "4ms - 5ms",
+      "Muestras Válidas": 5
+    },
+    {
+      "Ruta": "Portal Propietario (Liquidaciones y Fideicomiso)",
+      "Mediana Total": "188 ms",
+      "Rango Total": "168ms - 215ms",
+      "Promedio Total": "192 ms",
+      "Mediana TTFB": "154 ms",
+      "Rango TTFB": "133ms - 173ms",
+      "Muestras Válidas": 5
+    }
+  ],
+  "raw": {
+    "Ficha Inmueble (Villa Serena)": [
+      {
+        "route": "Ficha Inmueble (Villa Serena)",
+        "iteration": 1,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 5,
+        "usableContentMs": 254,
+        "totalMs": 254
+      },
+      {
+        "route": "Ficha Inmueble (Villa Serena)",
+        "iteration": 2,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 5,
+        "usableContentMs": 244,
+        "totalMs": 244
+      },
+      {
+        "route": "Ficha Inmueble (Villa Serena)",
+        "iteration": 3,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 7,
+        "usableContentMs": 205,
+        "totalMs": 205
+      },
+      {
+        "route": "Ficha Inmueble (Villa Serena)",
+        "iteration": 4,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 4,
+        "usableContentMs": 200,
+        "totalMs": 200
+      },
+      {
+        "route": "Ficha Inmueble (Villa Serena)",
+        "iteration": 5,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 6,
+        "usableContentMs": 233,
+        "totalMs": 233
+      }
+    ],
+    "Cartera PM (Bandeja Multipropiedad)": [
+      {
+        "route": "Cartera PM (Bandeja Multipropiedad)",
+        "iteration": 1,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 5,
+        "usableContentMs": 289,
+        "totalMs": 289
+      },
+      {
+        "route": "Cartera PM (Bandeja Multipropiedad)",
+        "iteration": 2,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 5,
+        "usableContentMs": 224,
+        "totalMs": 224
+      },
+      {
+        "route": "Cartera PM (Bandeja Multipropiedad)",
+        "iteration": 3,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 4,
+        "usableContentMs": 201,
+        "totalMs": 201
+      },
+      {
+        "route": "Cartera PM (Bandeja Multipropiedad)",
+        "iteration": 4,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 5,
+        "usableContentMs": 311,
+        "totalMs": 311
+      },
+      {
+        "route": "Cartera PM (Bandeja Multipropiedad)",
+        "iteration": 5,
+        "isWarmup": false,
+        "httpStatus": 304,
+        "ttfbMs": 5,
+        "usableContentMs": 198,
+        "totalMs": 198
+      }
+    ],
+    "Portal Propietario (Liquidaciones y Fideicomiso)": [
+      {
+        "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
+        "iteration": 1,
+        "isWarmup": false,
+        "httpStatus": 200,
+        "ttfbMs": 133,
+        "usableContentMs": 168,
+        "totalMs": 168
+      },
+      {
+        "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
+        "iteration": 2,
+        "isWarmup": false,
+        "httpStatus": 200,
+        "ttfbMs": 140,
+        "usableContentMs": 185,
+        "totalMs": 185
+      },
+      {
+        "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
+        "iteration": 3,
+        "isWarmup": false,
+        "httpStatus": 200,
+        "ttfbMs": 165,
+        "usableContentMs": 204,
+        "totalMs": 204
+      },
+      {
+        "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
+        "iteration": 4,
+        "isWarmup": false,
+        "httpStatus": 200,
+        "ttfbMs": 173,
+        "usableContentMs": 215,
+        "totalMs": 215
+      },
+      {
+        "route": "Portal Propietario (Liquidaciones y Fideicomiso)",
+        "iteration": 5,
+        "isWarmup": false,
+        "httpStatus": 200,
+        "ttfbMs": 154,
+        "usableContentMs": 188,
+        "totalMs": 188
+      }
+    ]
+  }
+}

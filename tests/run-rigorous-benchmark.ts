@@ -62,8 +62,8 @@ async function runRigorousBenchmark() {
       name: "Portal Propietario (Liquidaciones y Fideicomiso)",
       url: `${BASE_URL}/portal?propertyId=${PROPERTY_ID}`,
       user: "propietario@demo.custodia.app",
-      targetSelector: "main", // Contenedor principal del portal
-      interactionSelector: "button"
+      targetSelector: "div.p-8, header", // Contenedor renderizado del portal
+      interactionSelector: ""
     }
   ];
 

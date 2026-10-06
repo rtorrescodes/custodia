@@ -328,6 +328,25 @@ export const accountingService = {
     });
     const activeSettlementAmount = activeSettlements.reduce((sum: number, s: any) => sum + Number(s.netPayable || 0), 0);
 
+    // 4C. Aportaciones de fondos afectadas a órdenes específicas que aún no pasan a IN_PROGRESS
+    // Estos fondos ya ingresaron al banco fiduciario (VERIFIED), pero están etiquetados para una orden concreta.
+    // No deben constituir reserva general ni estar disponibles para otras operaciones.
+    const earmarkedContributions = await db.ownerContribution.findMany({
+      where: {
+        propertyId,
+        tenantId,
+        status: 'VERIFIED',
+        workOrderId: { not: null },
+        workOrder: {
+          status: { in: ['AWAITING_APPROVAL', 'PENDING'] }
+        }
+      },
+      select: { verifiedAmount: true, amount: true }
+    });
+    const earmarkedAmount = earmarkedContributions.reduce((sum: number, c: any) => {
+      return sum + Number(c.verifiedAmount || c.amount || 0);
+    }, 0);
+
     // 5. Acuerdo de gestión y reserva mínima contractual
     const agreement = await db.managementAgreement.findFirst({
       where: { tenantId, propertyId },
@@ -342,22 +361,25 @@ export const accountingService = {
     // Saldo neto del propietario bajo custodia PM (restando pasivo de depósitos en garantía)
     const netOwnerEscrowFunds = Number(pmEscrowBalance) - Number(securityDepositsHeld);
 
-    // Fondos disponibles antes de separar la reserva (no pueden ser negativos para constituir reserva)
-    const liquidFundsForReserve = Math.max(0, netOwnerEscrowFunds);
-    // Reserva efectivamente constituida con el efectivo real disponible
-    const reserveConstituida = Math.min(reserveMinimum, liquidFundsForReserve);
+    // Total de compromisos vigentes (órdenes en curso + liquidaciones activas)
+    const totalCommitted = committedAmount + activeSettlementAmount;
+
+    // Fondos ya comprometidos o etiquetados a obligaciones específicas
+    const totalObligations = totalCommitted + earmarkedAmount;
+
+    // Los fondos libres para constituir la reserva excluyen compromisos vigentes y fondos etiquetados
+    // (Un mismo peso no puede constituir reserva y financiar una orden en curso simultáneamente)
+    const freeFundsForReserve = Math.max(0, netOwnerEscrowFunds - totalObligations);
+    // Reserva efectivamente constituida con el efectivo libre real disponible
+    const reserveConstituida = Math.min(reserveMinimum, freeFundsForReserve);
     // Faltante para completar la reserva mínima requerida
     const reserveFaltante = Math.max(0, reserveMinimum - reserveConstituida);
 
-    // Total de compromisos vigentes
-    const totalCommitted = committedAmount + activeSettlementAmount;
-
-    // Disponible para nuevas obligaciones operativas:
-    // Efectivo neto real MENOS la reserva efectivamente constituida MENOS compromisos.
-    // Solo puede ser menor a 0 si los compromisos u obligaciones exceden el efectivo real disponible (déficit real).
-    const availableForExpenses = Math.max(0, netOwnerEscrowFunds - reserveConstituida - totalCommitted);
+    // Disponible para NUEVAS obligaciones operativas:
+    // Saldo neto MENOS todas las obligaciones (compromisos + etiquetados) MENOS la reserva efectivamente constituida.
+    const availableForExpenses = Math.max(0, netOwnerEscrowFunds - totalObligations - reserveConstituida);
     // Déficit real de fondos (deuda o compromisos en descubierto)
-    const realDeficit = (netOwnerEscrowFunds - totalCommitted) < 0 ? Math.abs(netOwnerEscrowFunds - totalCommitted) : 0;
+    const realDeficit = (netOwnerEscrowFunds - totalObligations) < 0 ? Math.abs(netOwnerEscrowFunds - totalObligations) : 0;
 
     return {
       custodiaPmEfectiva: Number(pmEscrowBalance),

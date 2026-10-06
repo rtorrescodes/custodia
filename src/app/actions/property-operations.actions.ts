@@ -5,6 +5,7 @@ import { withTenantRLS } from "@/lib/prisma"
 import { z } from "zod"
 import { translateText } from "@/lib/services/translation.service"
 import { accountingService } from "@/lib/services/accounting-service"
+import { propertyOperationsService } from "@/lib/services/property-operations.service"
 
 // -------------------------------------------------------------
 // 1. Reportar Gasto / Reparación con Validación Fiduciaria Real (A1)
@@ -109,97 +110,7 @@ const approveQuoteSchema = z.object({
 
 export async function approveQuoteAction(data: z.infer<typeof approveQuoteSchema>) {
   return safeAction(approveQuoteSchema, data, async (input, tenantId, userId) => {
-    return withTenantRLS(tenantId, async (tx) => {
-      const quote = await tx.workOrderQuote.findUnique({
-        where: { id: input.quoteId },
-        include: { workOrder: true }
-      });
-
-      if (!quote) throw new Error("Quote not found");
-
-      // Comprobar que aprueba exactamente la versión esperada
-      if (quote.version !== input.expectedVersion) {
-        throw new Error(`Material change detected: Quote version has changed from ${input.expectedVersion} to ${quote.version}. Must review updated version.`);
-      }
-
-      const totalCost = Number(quote.totalCost);
-
-      // CUS-09B: Comprobación unificada de fondos fiduciarios disponibles
-      const fiduciarySummary = await accountingService.getPropertyFiduciarySummary(tenantId, quote.workOrder.propertyId, tx);
-      const availableFunds = fiduciarySummary.disponibleNuevasObligaciones;
-      const hasSufficientFunds = availableFunds >= totalCost;
-
-      // 1. Decisión soberana del propietario: Aprobar formalmente la versión y el importe de la cotización
-      const updatedQuote = await tx.workOrderQuote.update({
-        where: { id: input.quoteId },
-        data: {
-          status: "APPROVED",
-          approvedById: userId,
-          approvedAt: new Date(),
-          approvalReason: input.reason || "Aprobado formalmente por el propietario en portal",
-        }
-      });
-
-      // 2. Comprobación fiduciaria separada de la decisión: ¿Hay fondos para autorizar inicio o requiere aportación?
-      const deficitAmount = hasSufficientFunds ? 0 : (totalCost - Math.max(0, availableFunds));
-
-      // 3. Estado de la orden de trabajo:
-      // Si tiene fondos -> IN_PROGRESS (autorizada para iniciar ejecución)
-      // Si no tiene fondos -> AWAITING_APPROVAL con descripción clara ("Aprobada por dueño; pendiente de fondos")
-      const newWOStatus = hasSufficientFunds ? "IN_PROGRESS" : "AWAITING_APPROVAL";
-
-      await tx.workOrder.update({
-        where: { id: quote.workOrderId },
-        data: {
-          status: newWOStatus,
-          actualCost: quote.totalCost,
-        }
-      });
-
-      // 4. Si faltan fondos, generar automáticamente solicitud de aportación ligada si no existe una pendiente
-      let linkedContributionId: string | null = null;
-      if (!hasSufficientFunds && deficitAmount > 0) {
-        const existingContrib = await tx.ownerContribution.findFirst({
-          where: {
-            tenantId,
-            propertyId: quote.workOrder.propertyId,
-            status: { in: ["REQUESTED", "REPORTED"] },
-            reason: { contains: quote.workOrder.title },
-          }
-        });
-
-        if (!existingContrib) {
-          const newContrib = await tx.ownerContribution.create({
-            data: {
-              tenantId,
-              propertyId: quote.workOrder.propertyId,
-              ownerId: userId,
-              amount: deficitAmount,
-              currency: quote.currency || "MXN",
-              destinationAccount: "PM_ESCROW",
-              reason: `Fondeo para reparación aprobada: ${quote.workOrder.title} (Cotización v${quote.version})`,
-              status: "REQUESTED",
-            }
-          });
-          linkedContributionId = newContrib.id;
-        } else {
-          linkedContributionId = existingContrib.id;
-        }
-      }
-
-      return {
-        approved: true,
-        quoteId: updatedQuote.id,
-        version: updatedQuote.version,
-        hasSufficientFunds,
-        availableFunds,
-        requiredFunds: totalCost,
-        deficitAmount,
-        statusLabel: hasSufficientFunds ? "Aprobada y autorizada para iniciar" : "Aprobada, pendiente de fondos",
-        linkedContributionId,
-        readyToStart: hasSufficientFunds,
-      };
-    });
+    return propertyOperationsService.approveQuote(tenantId, userId, input);
   });
 }
 
@@ -332,79 +243,21 @@ const reportContributionSchema = z.object({
 
 export async function reportOwnerContributionAction(data: z.infer<typeof reportContributionSchema>) {
   return safeAction(reportContributionSchema, data, async (input, tenantId, userId) => {
-    return withTenantRLS(tenantId, async (tx) => {
-      const contribution = await tx.ownerContribution.findUnique({
-        where: { id: input.contributionId, tenantId },
-      });
+    let fileBuffer: Buffer | null = null;
+    if (input.fileBase64 && input.fileName && input.fileMimeType) {
+      fileBuffer = Buffer.from(input.fileBase64, "base64");
+    }
 
-      if (!contribution) {
-        throw new Error("Solicitud de aportación no encontrada");
-      }
-
-      // Si ya está verificada, no se puede sobrescribir
-      if (contribution.status === "VERIFIED") {
-        throw new Error("Esta aportación ya fue verificada y liberada.");
-      }
-
-      let storagePath = contribution.evidenceUrl;
-
-      // Subida de comprobante al almacenamiento privado si se proporcionó archivo
-      if (input.fileBase64 && input.fileName && input.fileMimeType) {
-        const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
-        const fileBuffer = Buffer.from(input.fileBase64, "base64");
-        const uploadResult = await evidenceStorageService.uploadFile({
-          tenantId,
-          propertyId: contribution.propertyId,
-          filename: input.fileName,
-          buffer: fileBuffer,
-          mimeType: input.fileMimeType,
-        });
-        storagePath = uploadResult.path;
-      }
-
-      // Si hay discrepancia de importe solicitado vs reportado, se registra explícitamente en notas
-      const requestedAmt = Number(contribution.amount);
-      const diff = input.reportedAmount - requestedAmt;
-      const discrepancyNote = diff !== 0
-        ? `[REVISIÓN DE IMPORTE]: Solicitado: $${requestedAmt.toLocaleString()} ${contribution.currency} | Reportado: $${input.reportedAmount.toLocaleString()} ${input.reportedCurrency} (Diferencia: ${diff > 0 ? "+" : ""}$${diff.toLocaleString()})`
-        : "";
-
-      const combinedNotes = [
-        `Ref: ${input.reference} · Fecha transf: ${input.transferDate}`,
-        input.notes ? `Nota: ${input.notes}` : "",
-        discrepancyNote
-      ].filter(Boolean).join(" | ");
-
-      // Un comprobante reportado NO libera fondos automáticamente; pasa a REPORTED
-      try {
-        const updated = await tx.ownerContribution.update({
-          where: { id: input.contributionId, tenantId },
-          data: {
-            status: "REPORTED",
-            reportedAt: new Date(),
-            reference: input.reference,
-            evidenceUrl: storagePath,
-            notes: combinedNotes,
-          }
-        });
-
-        return {
-          contributionId: updated.id,
-          status: updated.status,
-          requestedAmount: requestedAmt,
-          reportedAmount: input.reportedAmount,
-          currency: input.reportedCurrency,
-          discrepancy: diff !== 0,
-          verified: false, // Cero liberación prematura
-          message: "Transferencia reportada. Pendiente de verificar recepción."
-        };
-      } catch (dbErr: any) {
-        if (storagePath) {
-          const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
-          await evidenceStorageService.deleteFile(storagePath);
-        }
-        throw dbErr;
-      }
+    return propertyOperationsService.reportOwnerContribution(tenantId, userId, {
+      contributionId: input.contributionId,
+      reference: input.reference,
+      transferDate: input.transferDate,
+      reportedAmount: input.reportedAmount,
+      reportedCurrency: input.reportedCurrency,
+      notes: input.notes,
+      fileBuffer,
+      fileName: input.fileName,
+      fileMimeType: input.fileMimeType,
     });
   });
 }
@@ -414,6 +267,7 @@ export async function reportOwnerContributionAction(data: z.infer<typeof reportC
 // -------------------------------------------------------------
 const verifyContributionSchema = z.object({
   contributionId: z.string().uuid(),
+  verifiedAmount: z.number().positive().optional(),
   notes: z.string().optional(),
 })
 
@@ -426,83 +280,7 @@ export async function verifyOwnerContributionAction(data: z.infer<typeof verifyC
         throw new Error("Only property managers can verify and release contribution funds");
       }
 
-      const contribution = await tx.ownerContribution.findUnique({
-        where: { id: input.contributionId, tenantId },
-      });
-
-      if (!contribution) throw new Error("Contribution not found");
-      if (contribution.status === "VERIFIED") {
-        return {
-          contributionId: contribution.id,
-          status: "VERIFIED",
-          releasedAmount: Number(contribution.amount),
-          verifiedAt: contribution.verifiedAt,
-        };
-      }
-
-      const now = new Date();
-      const updatedContribution = await tx.ownerContribution.update({
-        where: { id: input.contributionId, tenantId },
-        data: {
-          status: "VERIFIED",
-          verifiedAt: now,
-          verifiedById: userId,
-          availableAt: now,
-          notes: input.notes,
-        }
-      });
-
-      // Acreditar contablemente en el ledger de partida doble
-      const accounts = await accountingService.ensureStandardChartOfAccounts(tenantId, tx);
-      const amountNum = Number(updatedContribution.amount);
-
-      await accountingService.postEntry({
-        tenantId,
-        idempotencyKey: `owner-contrib-${updatedContribution.id}`,
-        effectiveDate: now,
-        description: `Aportación verificada de fondos de propietario: ${updatedContribution.reason}`,
-        createdById: userId,
-        lines: [
-          {
-            accountId: accounts.cashPmEscrow,
-            debit: amountNum,
-            credit: 0,
-            currency: updatedContribution.currency,
-            propertyId: updatedContribution.propertyId,
-            ownerId: updatedContribution.ownerId,
-          },
-          {
-            accountId: accounts.ownerFundsPayable,
-            debit: 0,
-            credit: amountNum,
-            currency: updatedContribution.currency,
-            propertyId: updatedContribution.propertyId,
-            ownerId: updatedContribution.ownerId,
-          }
-        ]
-      }, tx);
-
-      // Registrar además en Transaction para visibilidad en extractos transaccionales del portal
-      await tx.transaction.create({
-        data: {
-          tenantId,
-          propertyId: updatedContribution.propertyId,
-          type: "INCOME",
-          category: "APORTACION_PROPIETARIO",
-          amount: updatedContribution.amount,
-          currency: updatedContribution.currency,
-          description: `Aportación recibida y verificada: ${updatedContribution.reason}`,
-          createdAt: now,
-        }
-      });
-
-      return {
-        contributionId: updatedContribution.id,
-        status: "VERIFIED",
-        releasedAmount: amountNum,
-        verifiedAt: updatedContribution.verifiedAt,
-        availableAt: updatedContribution.availableAt,
-      };
+      return propertyOperationsService.verifyOwnerContribution(tenantId, userId, input, tx);
     });
   });
 }
@@ -511,19 +289,13 @@ export async function verifyOwnerContributionAction(data: z.infer<typeof verifyC
 // 6B. Obtener URL temporal firmada para consultar evidencia privada
 // -------------------------------------------------------------
 const getSignedEvidenceSchema = z.object({
-  storagePath: z.string().min(3),
+  contributionId: z.string().uuid().optional(),
+  storagePath: z.string().min(3).optional(),
 })
 
 export async function getEvidenceSignedUrlAction(data: z.infer<typeof getSignedEvidenceSchema>) {
-  return safeAction(getSignedEvidenceSchema, data, async (input, tenantId) => {
-    // Verificar que la ruta pertenece al tenant actual (Zero-Trust path traversal prevention)
-    if (!input.storagePath.startsWith(`${tenantId}/`) && !input.storagePath.startsWith("http")) {
-      throw new Error("Acceso no autorizado al archivo solicitado");
-    }
-
-    const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
-    const signedUrl = await evidenceStorageService.getSignedViewUrl(input.storagePath, 900); // 15 minutos
-    return { signedUrl };
+  return safeAction(getSignedEvidenceSchema, data, async (input, tenantId, userId) => {
+    return propertyOperationsService.getEvidenceSignedUrl(tenantId, userId, input);
   });
 }
 
@@ -558,6 +330,18 @@ export async function verifyWorkOrderCompletionAction(data: z.infer<typeof verif
 }
 
 // -------------------------------------------------------------
+// 7B. Cancelar Orden de Trabajo y Liberar Compromisos / Desafectar Fondos
+// -------------------------------------------------------------
+const cancelWorkOrderSchema = z.object({
+  workOrderId: z.string().uuid(),
+  cancellationReason: z.string().min(3),
+})
+
+export async function cancelWorkOrderAction(data: z.infer<typeof cancelWorkOrderSchema>) {
+  return safeAction(cancelWorkOrderSchema, data, async (input, tenantId, userId) => {
+    return propertyOperationsService.cancelWorkOrder(tenantId, userId, input);
+  });
+}
 // 7B. Registrar Pago a Proveedor (Liquidación en Ledger Contable)
 // -------------------------------------------------------------
 const recordVendorPaymentSchema = z.object({
@@ -572,103 +356,7 @@ const recordVendorPaymentSchema = z.object({
 
 export async function recordVendorPaymentAction(data: z.infer<typeof recordVendorPaymentSchema>) {
   return safeAction(recordVendorPaymentSchema, data, async (input, tenantId, userId) => {
-    return withTenantRLS(tenantId, async (tx) => {
-      const wo = await tx.workOrder.findUnique({
-        where: { id: input.workOrderId, tenantId },
-        include: { property: true }
-      });
-
-      if (!wo) throw new Error("Work order not found");
-
-      // Validar modalidad: Si la custodia es DIRECT_OWNER o LANDLORD, el PM no dispersa de su cuenta
-      if (wo.property.fundCustodian === "DIRECT_OWNER") {
-        throw new Error("Modalidad DIRECT_OWNER: Los pagos son realizados directamente por el propietario desde sus cuentas bancarias.");
-      }
-
-      // Comprobar disponibilidad de fondos en custodia PM para liquidar
-      const fiduciary = await accountingService.getPropertyFiduciarySummary(tenantId, wo.propertyId, tx);
-      if (fiduciary.custodiaPmEfectiva < input.amount) {
-        throw new Error(`Fondos insuficientes en custodia PM para emitir pago (${fiduciary.custodiaPmEfectiva} < ${input.amount}). Requiere aportación previa.`);
-      }
-
-      // Regla CUS-09C: No rechazar por descontar primero el compromiso y luego exigir nuevamente el mismo disponible.
-      // El pago consume el compromiso de la orden; el disponible de la propiedad después de considerar este compromiso
-      // propio es: disponibleNuevasObligaciones + compromisoPropioDeEstaOrden.
-      const previousPaid = Number(wo.actualCost || 0);
-      const estimated = Number(wo.estimatedCost || 0);
-      const remainingCommitmentForThisOrder = Math.max(0, estimated - previousPaid);
-      const effectiveAvailableForThisWO = fiduciary.disponibleNuevasObligaciones + remainingCommitmentForThisOrder;
-
-      if (effectiveAvailableForThisWO < input.amount) {
-        throw new Error(`Fondos insuficientes netos para liquidar la orden de trabajo (Disponible neto considerando compromiso: $${effectiveAvailableForThisWO.toFixed(2)} MXN, Requerido: $${input.amount.toFixed(2)} MXN).`);
-      }
-
-      const now = new Date();
-      const accounts = await accountingService.ensureStandardChartOfAccounts(tenantId, tx);
-
-      // 1. Asiento contable de doble partida: Débito Gasto Mantenimiento, Crédito Caja PM Escrow
-      const entry = await accountingService.postEntry({
-        tenantId,
-        idempotencyKey: `vendor-pay-wo-${wo.id}-${input.reference}`,
-        effectiveDate: now,
-        description: `Pago a proveedor por orden de trabajo ${wo.title}: Ref ${input.reference}${input.isFinalPayment ? " (Finiquito)" : " (Anticipo/Parcial)"}`,
-        createdById: userId,
-        lines: [
-          {
-            accountId: accounts.maintenanceExpense,
-            debit: input.amount,
-            credit: 0,
-            currency: "MXN",
-            propertyId: wo.propertyId,
-          },
-          {
-            accountId: accounts.cashPmEscrow,
-            debit: 0,
-            credit: input.amount,
-            currency: "MXN",
-            propertyId: wo.propertyId,
-          }
-        ]
-      }, tx);
-
-      // 2. Registrar egreso en Transaction para extractos del portal
-      await tx.transaction.create({
-        data: {
-          tenantId,
-          propertyId: wo.propertyId,
-          type: "EXPENSE",
-          category: "MANTENIMIENTO",
-          amount: input.amount,
-          currency: "MXN",
-          description: `Pago a proveedor: ${wo.title} (Ref: ${input.reference})`,
-          createdAt: now,
-        }
-      });
-
-      // 3. Actualizar orden: Acumular costo pagado y determinar status (COMPLETED si es final o cubre total)
-      const newAccumulatedCost = previousPaid + input.amount;
-      const isCompleted = input.isFinalPayment || newAccumulatedCost >= estimated;
-      const newStatus = isCompleted ? "COMPLETED" : "IN_PROGRESS";
-
-      await tx.workOrder.update({
-        where: { id: wo.id },
-        data: {
-          actualCost: newAccumulatedCost,
-          status: newStatus,
-        }
-      });
-
-      return {
-        workOrderId: wo.id,
-        paidAmount: input.amount,
-        totalPaidSoFar: newAccumulatedCost,
-        isCompleted,
-        status: newStatus,
-        journalEntryId: entry.id,
-        reference: input.reference,
-        paidToVendor: true,
-      };
-    });
+    return propertyOperationsService.recordVendorPayment(tenantId, userId, input);
   });
 }
 

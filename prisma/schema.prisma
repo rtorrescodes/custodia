@@ -281,8 +281,9 @@ model WorkOrder {
   property   Property            @relation(fields: [propertyId], references: [id])
   assignedTo User?               @relation("AssignedStaff", fields: [assignedToId], references: [id])
   evidences  FileEvidence[]
-  quotes     WorkOrderQuote[]
-  alddeaPass AlddeaPassDelegation?
+  quotes        WorkOrderQuote[]
+  alddeaPass    AlddeaPassDelegation?
+  contributions OwnerContribution[]
 }
 
 enum WOPriority {
@@ -1215,7 +1216,10 @@ model OwnerContribution {
   tenantId           String
   propertyId         String
   ownerId            String
-  amount             Decimal
+  workOrderId        String?            // Afectación directa e inequívoca a una orden de trabajo
+  amount             Decimal            // Importe solicitado
+  reportedAmount     Decimal?           // Importe reportado por el propietario
+  verifiedAmount     Decimal?           // Importe efectivamente recibido y confirmado por el PM
   currency           String             @default("MXN")
   reason             String
   destinationAccount String             @default("PM_ESCROW") // PM_ESCROW, DIRECT_OWNER
@@ -1231,10 +1235,12 @@ model OwnerContribution {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  property  Property   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, propertyId, status])
   @@index([ownerId])
+  @@index([workOrderId])
 }
 
 model SupplyInventory {
