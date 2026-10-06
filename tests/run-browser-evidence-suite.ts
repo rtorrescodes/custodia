@@ -87,8 +87,9 @@ async function runBrowserEvidenceSuite() {
     // Asegurar que el input de importe tenga valor válido
     const amountInput = await page.$("input[type='number']");
     if (amountInput) {
-      await page.evaluate(el => { (el as HTMLInputElement).value = ""; }, amountInput);
-      await amountInput.type(String(targetContrib.amount || 6500));
+      await amountInput.click({ clickCount: 3 });
+      await page.keyboard.press("Backspace");
+      await amountInput.type("6500");
     }
 
     // Adjuntar archivo PDF de prueba
