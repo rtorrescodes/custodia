@@ -3,7 +3,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 async function main() {
-  const pkgDir = path.resolve('release-evidence-b3991ca');
+  const pkgDir = path.resolve('release-evidence-41d4e98');
   if (fs.existsSync(pkgDir)) fs.rmSync(pkgDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(pkgDir, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(pkgDir, 'logs'), { recursive: true });
@@ -60,9 +60,9 @@ async function main() {
     fs.writeFileSync(path.join(pkgDir, 'audits', 'trivy-fs-scan.log'), 'Trivy CLI no disponible en entorno anfitrion Windows. Auditoria estatica identificada formalmente como no ejecutada localmente.', 'utf8');
   }
 
-  console.log('8. Compressing release-evidence-b3991ca.zip...');
-  execSync('powershell -Command "Compress-Archive -Path release-evidence-b3991ca/* -DestinationPath release-evidence-b3991ca.zip -Force"');
-  console.log('✅ PAQUETE GENERADO Y COMPRIMIDO EXITOSAMENTE: release-evidence-b3991ca.zip');
+  console.log('8. Compressing release-evidence-41d4e98.zip...');
+  execSync('powershell -Command "Compress-Archive -Path release-evidence-41d4e98/* -DestinationPath release-evidence-41d4e98.zip -Force"');
+  console.log('✅ PAQUETE GENERADO Y COMPRIMIDO EXITOSAMENTE: release-evidence-41d4e98.zip');
 }
 
 main().catch(err => {
