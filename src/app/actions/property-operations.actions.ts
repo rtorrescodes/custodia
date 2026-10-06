@@ -376,27 +376,35 @@ export async function reportOwnerContributionAction(data: z.infer<typeof reportC
       ].filter(Boolean).join(" | ");
 
       // Un comprobante reportado NO libera fondos automáticamente; pasa a REPORTED
-      const updated = await tx.ownerContribution.update({
-        where: { id: input.contributionId, tenantId },
-        data: {
-          status: "REPORTED",
-          reportedAt: new Date(),
-          reference: input.reference,
-          evidenceUrl: storagePath,
-          notes: combinedNotes,
-        }
-      });
+      try {
+        const updated = await tx.ownerContribution.update({
+          where: { id: input.contributionId, tenantId },
+          data: {
+            status: "REPORTED",
+            reportedAt: new Date(),
+            reference: input.reference,
+            evidenceUrl: storagePath,
+            notes: combinedNotes,
+          }
+        });
 
-      return {
-        contributionId: updated.id,
-        status: updated.status,
-        requestedAmount: requestedAmt,
-        reportedAmount: input.reportedAmount,
-        currency: input.reportedCurrency,
-        discrepancy: diff !== 0,
-        verified: false, // Cero liberación prematura
-        message: "Transferencia reportada. Pendiente de verificar recepción."
-      };
+        return {
+          contributionId: updated.id,
+          status: updated.status,
+          requestedAmount: requestedAmt,
+          reportedAmount: input.reportedAmount,
+          currency: input.reportedCurrency,
+          discrepancy: diff !== 0,
+          verified: false, // Cero liberación prematura
+          message: "Transferencia reportada. Pendiente de verificar recepción."
+        };
+      } catch (dbErr: any) {
+        if (storagePath) {
+          const { evidenceStorageService } = await import("@/lib/services/evidence-storage");
+          await evidenceStorageService.deleteFile(storagePath);
+        }
+        throw dbErr;
+      }
     });
   });
 }

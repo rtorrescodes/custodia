@@ -98,9 +98,9 @@ export default async function PropertyPage({ params }: { params: Promise<{ id: s
             <span className="text-xs font-semibold text-foreground">
               ${(property.fondosFiduciarios?.reservaConstituida || 0).toLocaleString()} / ${(property.fondosFiduciarios?.reservaMinima || 2000).toLocaleString()} MXN
             </span>
-            <span className="text-[10px] text-muted-foreground truncate">
+            <span className="text-[10px] text-muted-foreground truncate" title="Pendiente para completar la reserva acordada. Este faltante no representa, por sí solo, una deuda vencida.">
               {property.fondosFiduciarios?.reservaFaltante > 0
-                ? `Meta pendiente: $${property.fondosFiduciarios.reservaFaltante.toLocaleString()} (no exigible)`
+                ? `Pendiente para meta: $${property.fondosFiduciarios.reservaFaltante.toLocaleString()} MXN`
                 : "Meta contractual completa"}
             </span>
           </div>

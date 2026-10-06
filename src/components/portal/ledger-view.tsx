@@ -113,8 +113,8 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
               <p className="text-[10px] text-muted-foreground mt-0.5">
                 Meta acordada: ${fid.reservaMinima.toLocaleString()} MXN
                 {fid.reservaFaltante > 0 && (
-                  <span className="block text-blue-600 dark:text-blue-400">
-                    (Faltante para meta: ${fid.reservaFaltante.toLocaleString()} MXN · No es deuda)
+                  <span className="block text-blue-600 dark:text-blue-400 mt-0.5">
+                    Pendiente para completar la reserva acordada: ${fid.reservaFaltante.toLocaleString()} MXN. Este faltante no representa, por sí solo, una deuda vencida.
                   </span>
                 )}
               </p>
@@ -150,7 +150,7 @@ function SummaryCards({ resumen }: { resumen: LedgerProps["resumen"] }) {
         <div>
           <span className="font-semibold text-neutral-900 dark:text-neutral-100">Transparencia Financiera Fiduciaria:</span>
           <p className="mt-0.5">
-            El disponible para nuevas operaciones deduce comisiones y compromisos autorizados. La reserva es un colchón para emergencias (no una deuda vencida). Los depósitos en garantía se mantienen en custodia separada sin mezclarse con el gasto operativo.
+            El disponible para nuevas operaciones deduce comisiones y compromisos autorizados. Pendiente para completar la reserva acordada: este faltante no representa, por sí solo, una deuda vencida. Los depósitos en garantía se mantienen en custodia separada sin mezclarse con el gasto operativo.
           </p>
         </div>
       </div>

@@ -42,6 +42,15 @@ export const evidenceStorageService = {
       throw new Error("El archivo excede el tamaño máximo permitido de 10 MB.")
     }
 
+    // Validación estricta de Magic Bytes en servidor (Zero Trust sobre cabecera enviada por cliente)
+    const isJpeg = buffer.length > 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF
+    const isPng = buffer.length > 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47
+    const isPdf = buffer.length > 4 && buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46 // %PDF
+
+    if (!isJpeg && !isPng && !isPdf) {
+      throw new Error("Contenido de archivo inválido: el binario no coincide con una firma válida de PDF, JPG o PNG.")
+    }
+
     const now = new Date()
     const year = now.getFullYear()
     const month = String(now.getMonth() + 1).padStart(2, "0")
@@ -90,5 +99,23 @@ export const evidenceStorageService = {
     }
 
     return data.signedUrl
+  },
+
+  /**
+   * Elimina un archivo ante rollback o fallo para evitar archivos huérfanos.
+   */
+  async deleteFile(storagePath: string): Promise<boolean> {
+    if (!storagePath || storagePath.startsWith("http")) return true
+    try {
+      const supabase = getAdminClient()
+      const { error } = await supabase.storage.from(BUCKET_NAME).remove([storagePath])
+      if (error) {
+        console.warn("No se pudo remover archivo huérfano:", error)
+        return false
+      }
+      return true
+    } catch {
+      return false
+    }
   }
 }
