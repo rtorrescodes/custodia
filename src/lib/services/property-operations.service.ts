@@ -73,7 +73,41 @@ export const propertyOperationsService = {
       const currentWo = await tx.workOrder.findUnique({
         where: { id: quote.workOrderId, tenantId }
       });
-      if (!currentWo) throw new Error("Orden de trabajo no encontrada tras bloqueo.");
+      // 1.5. Idempotencia de aprobación: Si esta versión ya fue aprobada previamente
+      if (quote.status === "APPROVED") {
+        const existingContrib = await tx.ownerContribution.findFirst({
+          where: {
+            tenantId,
+            propertyId: quote.workOrder.propertyId,
+            workOrderId: quote.workOrderId,
+            status: { in: ["REQUESTED", "REPORTED", "VERIFIED"] },
+          }
+        });
+
+        const fiduciarySummary = await accountingService.getPropertyFiduciarySummary(
+          tenantId,
+          quote.workOrder.propertyId,
+          tx
+        );
+        const availableFunds = fiduciarySummary.disponibleNuevasObligaciones;
+        const totalCost = Number(quote.totalCost);
+        const hasSufficientFunds = currentWo.status === "IN_PROGRESS" || currentWo.status === "COMPLETED" || availableFunds >= totalCost;
+        const deficitAmount = hasSufficientFunds ? 0 : (totalCost - Math.max(0, availableFunds));
+
+        return {
+          approved: true,
+          quoteId: quote.id,
+          version: quote.version,
+          hasSufficientFunds,
+          availableFunds,
+          requiredFunds: totalCost,
+          deficitAmount,
+          statusLabel: currentWo.status === "COMPLETED" ? "Aprobada y completada" : (currentWo.status === "IN_PROGRESS" ? "Aprobada y en ejecución" : (hasSufficientFunds ? "Aprobada y autorizada para iniciar" : "Aprobada, pendiente de fondos")),
+          linkedContributionId: existingContrib?.id || null,
+          readyToStart: hasSufficientFunds,
+          idempotentSkip: true,
+        };
+      }
 
       if (currentWo.status === "COMPLETED") {
         throw new Error("No se puede aprobar una cotización en una orden ya completada.");
@@ -105,7 +139,10 @@ export const propertyOperationsService = {
       });
 
       const deficitAmount = hasSufficientFunds ? 0 : (totalCost - Math.max(0, availableFunds));
-      const newWOStatus = hasSufficientFunds ? "IN_PROGRESS" : "AWAITING_APPROVAL";
+      // Si la orden ya estaba en IN_PROGRESS (ej. reintento o aprobación complementaria), no degradar a AWAITING_APPROVAL
+      const newWOStatus = currentWo.status === "IN_PROGRESS" 
+        ? "IN_PROGRESS" 
+        : (hasSufficientFunds ? "IN_PROGRESS" : "AWAITING_APPROVAL");
 
       // 4. Actualizar orden de trabajo con el presupuesto aprobado (estimatedCost) sin resetear pagos acumulados previos
       const preservedActualCost = currentWo.actualCost !== null ? currentWo.actualCost : 0;
@@ -321,6 +358,12 @@ export const propertyOperationsService = {
     },
     externalTx?: any
   ) {
+    if (externalTx && (input.fileBuffer || input.storagePath)) {
+      throw new Error(
+        "Las operaciones de aportación con gestión de archivos físicos en Storage no admiten transacción externa (externalTx) no confinada. Deben gestionar su propia frontera de transacción para garantizar compensación y limpieza tras el COMMIT."
+      );
+    }
+
     // Subida previa y segura fuera de la transacción para poder compensar si falla la DB
     let newStoragePath: string | null = input.storagePath || null;
     let uploadedHere = false;
@@ -540,12 +583,15 @@ export const propertyOperationsService = {
       });
       if (!currentWo) throw new Error("Orden de trabajo no encontrada tras bloqueo.");
 
-      // Idempotencia conjunta: verificar si ya existe una transacción de pago registrada con esta referencia para ESTA orden
+      // Clave estable de operación: workOrderId + reference
+      const paymentKey = `PAY_WO_${currentWo.id}_${input.reference}`;
+
+      // Idempotencia conjunta por relación persistente de clave estable y workOrderId
       const existingTx = await tx.transaction.findFirst({
         where: {
           tenantId,
-          propertyId: currentWo.propertyId,
-          description: { contains: `${currentWo.title} (Ref: ${input.reference})` }
+          workOrderId: currentWo.id,
+          paymentKey: paymentKey,
         }
       });
 
@@ -553,17 +599,28 @@ export const propertyOperationsService = {
         const existingAmount = Number(existingTx.amount);
         if (Math.abs(existingAmount - input.amount) > 0.01) {
           throw new Error(
-            `Conflicto de idempotencia: La referencia de pago '${input.reference}' ya fue registrada previamente con un importe diferente ($${existingAmount} vs $${input.amount}).`
+            `Conflicto de idempotencia: La clave de pago '${input.reference}' para la orden ${currentWo.id} ya fue registrada previamente con un importe diferente ($${existingAmount} vs $${input.amount}).`
           );
         }
-        // Retornar resultado idempotente sin volver a duplicar asiento, transacción ni sumar actualCost
+        // Buscar el asiento contable original si existe
+        const existingJournalEntry = await tx.journalEntry.findUnique({
+          where: {
+            tenantId_idempotencyKey: {
+              tenantId,
+              idempotencyKey: `vendor-pay-wo-${currentWo.id}-${input.reference}`
+            }
+          }
+        });
+
+        // Retornar resultado idempotente con identificador real original sin volver a duplicar
         return {
           workOrderId: currentWo.id,
           paidAmount: existingAmount,
           totalPaidSoFar: Number(currentWo.actualCost || 0),
           isCompleted: currentWo.status === "COMPLETED",
           status: currentWo.status,
-          journalEntryId: `idempotent-skip-${input.reference}`,
+          transactionId: existingTx.id,
+          journalEntryId: existingJournalEntry?.id || existingTx.id,
           reference: input.reference,
           paidToVendor: true,
           idempotentSkip: true,
@@ -617,11 +674,13 @@ export const propertyOperationsService = {
         ]
       }, tx);
 
-      // Registrar transacción
-      await tx.transaction.create({
+      // Registrar transacción vinculada con clave estable y workOrderId
+      const createdTx = await tx.transaction.create({
         data: {
           tenantId,
           propertyId: currentWo.propertyId,
+          workOrderId: currentWo.id,
+          paymentKey: paymentKey,
           type: "EXPENSE",
           category: "MANTENIMIENTO",
           amount: input.amount,
@@ -649,6 +708,7 @@ export const propertyOperationsService = {
         totalPaidSoFar: newAccumulatedCost,
         isCompleted,
         status: newStatus,
+        transactionId: createdTx.id,
         journalEntryId: entry.id,
         reference: input.reference,
         paidToVendor: true,

@@ -25,6 +25,7 @@ export default async function PortalPage({
   try {
     properties = await getOwnerProperties()
   } catch (e) {
+    console.error("[PORTAL_PAGE_ERROR]: Error loading owner properties:", e);
     // Not an owner or unauthorized
     return <div className="p-8 text-center">{dict.noProperties}</div>
   }

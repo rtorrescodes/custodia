@@ -8,7 +8,7 @@ import { getCookies } from "./auth-cookie-helper.cjs";
 import { Pool } from "pg";
 
 const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const BASE_URL = "http://localhost:3000";
+const BASE_URL = "http://localhost:3005";
 const PROPERTY_ID = "f28e8fa3-63e8-4113-b620-0cf181e2363c"; // Villa Serena Residencial
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const SCREENSHOTS_DIR = path.join(__dirname, "screenshots");
@@ -55,6 +55,12 @@ async function runBrowserEvidenceSuite() {
 
     const ownerCookie = await getCookies("propietario@demo.custodia.app");
     await page.setCookie(ownerCookie);
+    await page.setCookie({
+      name: "custodia_active_tenant",
+      value: "63ba31f2-cf6a-4f05-a8f7-06393d6222a8",
+      domain: "localhost",
+      path: "/",
+    });
 
     await page.goto(`${BASE_URL}/portal?propertyId=${PROPERTY_ID}`, { waitUntil: "networkidle2" });
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_01_portal_propietario.png"), fullPage: true });
@@ -207,110 +213,212 @@ async function runBrowserEvidenceSuite() {
       }
     }
 
-    // Comprobar si quedó VERIFIED; si no, invocar acción verificada con la sesión PM
-    const dbCheck1 = (await pool.query(
-      `SELECT status, "verifiedAmount" FROM "OwnerContribution" WHERE id = $1`,
-      [targetContrib.id]
-    )).rows[0];
-
-    if (dbCheck1?.status !== "VERIFIED") {
-      const { propertyOperationsService } = await import("../src/lib/services/property-operations.service");
-      const pmUser = (await pool.query(`SELECT id FROM "User" WHERE email = 'pm@demo.custodia.app'`)).rows[0];
-      await propertyOperationsService.verifyOwnerContribution(
-        "63ba31f2-cf6a-4f05-a8f7-06393d6222a8",
-        pmUser.id,
-        {
-          contributionId: targetContrib.id,
-          verifiedAmount: 6500,
-          notes: "Verificado formalmente por PM contra estado bancario"
-        }
-      );
-    }
-
+    // Comprobar estrictamente en la base de datos que la UI logró VERIFIED sin ningún fallback
+    await new Promise(r => setTimeout(r, 2000));
     const dbVerified = (await pool.query(
       `SELECT status, "verifiedAmount" FROM "OwnerContribution" WHERE id = $1`,
       [targetContrib.id]
     )).rows[0];
-    console.log("Aportación tras verificación PM:", dbVerified);
-    assert.strictEqual(dbVerified?.status, "VERIFIED", "La aportación debe quedar VERIFIED");
+    console.log("Aportación tras verificación PM desde UI:", dbVerified);
+    assert.strictEqual(dbVerified?.status, "VERIFIED", "La aportación debe quedar VERIFIED exclusivamente por interacción de la interfaz");
     assert.strictEqual(Number(dbVerified?.verifiedAmount), 6500, "El monto verificado debe ser exactamente 6500");
 
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_05b_pm_aportacion_verificada.png"), fullPage: true });
 
     // -------------------------------------------------------------------------
-    // 3B. ASIGNACIÓN, EJECUCIÓN Y VERIFICACIÓN DE TAREA DE LLEGADA
+    // 3B. CICLO DE PREPARACIÓN DE LLEGADA CON SESIONES INDEPENDIENTES (PM & OPERARIO)
     // -------------------------------------------------------------------------
     console.log("\n--- 3B. Flujo de preparación de llegada: Asignación, entrega y verificación ---");
 
-    // 1. Ir a pestaña Llegadas & Estancias
-    const staysTrigger = await page.$("button[value='stays']");
-    if (staysTrigger) {
-      await staysTrigger.click();
-      await new Promise(r => setTimeout(r, 1200));
-      await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_06_pm_llegadas_checklist.png"), fullPage: true });
+    // 1. Asegurar estancia identificable para Villa Serena
+    let targetStay = (await pool.query(
+      `SELECT id, "inspectorName", status, "checklistJson" FROM "Inspection" 
+       WHERE "propertyId" = $1 AND type = 'MOVE_IN' AND status != 'DISPUTED' 
+       ORDER BY "inspectionDate" DESC LIMIT 1`,
+      [PROPERTY_ID]
+    )).rows[0];
+
+    if (!targetStay) {
+      const insStay = await pool.query(
+        `INSERT INTO "Inspection" (id, "tenantId", "propertyId", type, status, "inspectorName", "inspectionDate", "summaryNotes", "checklistJson", "createdAt", "updatedAt")
+         VALUES (gen_random_uuid(), '63ba31f2-cf6a-4f05-a8f7-06393d6222a8', $1, 'MOVE_IN', 'SCHEDULED', 'Rodrigo Torres (Dueño)', NOW() + INTERVAL '3 days', 'Llegada de propietario - Insumos requeridos', '{"limpieza": true, "aireAcondicionado": true}', NOW(), NOW())
+         RETURNING id, "inspectorName", status, "checklistJson"`,
+        [PROPERTY_ID]
+      );
+      targetStay = insStay.rows[0];
     }
 
-    // 2. Asignar tarea de preparación si está el botón
+    // Demostrar que mientras la tarea esté pendiente/sin verificar, la llegada permanece bloqueada
+    assert.notStrictEqual(targetStay.status, "COMPLETED", "La llegada debe comenzar en estado no-COMPLETED (bloqueada por checklist)");
+
+    // 2. PM abre pestaña 'Llegadas & Estancias' y asigna tarea de preparación a proveedor@demo.custodia.app
+    await page.goto(`${BASE_URL}/propiedades/${PROPERTY_ID}`, { waitUntil: "networkidle2" });
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll("button[role='tab']"));
+      const tab = tabs.find(t => t.textContent && t.textContent.includes("Llegadas & Estancias"));
+      if (tab) (tab as HTMLButtonElement).click();
+    });
+    await new Promise(r => setTimeout(r, 1500));
+
+    // PM busca botón 'Asignar tarea'
+    let clickedAssignBtn = false;
     for (const b of await page.$$("button")) {
       const text = await page.evaluate(el => el.textContent, b);
       if (text && (text.includes("Asignar tarea") || text.includes("Asignar Tarea"))) {
         await b.click();
-        await new Promise(r => setTimeout(r, 600));
-        // Seleccionar primer integrante del select si está abierto
-        const assigneeSelect = await page.$("select");
-        if (assigneeSelect) {
-          const optionVal = await page.evaluate(sel => {
-            const opt = (sel as HTMLSelectElement).options[1];
-            return opt ? opt.value : "";
-          }, assigneeSelect);
-          if (optionVal) {
-            await assigneeSelect.select(optionVal);
-            for (const cb of await page.$$("button")) {
-              const cText = await page.evaluate(el => el.textContent, cb);
-              if (cText && cText.includes("Confirmar")) {
-                await cb.click();
-                await new Promise(r => setTimeout(r, 1500));
-                break;
-              }
-            }
-          }
-        }
+        clickedAssignBtn = true;
+        await new Promise(r => setTimeout(r, 1000));
         break;
       }
     }
+    assert.ok(clickedAssignBtn, "El botón 'Asignar tarea' debe estar disponible y ser clickeado");
 
-    // 3. Ir a pestaña Tareas para revisar tareas operativas
-    const tasksTrigger = await page.$("button[value='tasks']");
-    if (tasksTrigger) {
-      await tasksTrigger.click();
-      await new Promise(r => setTimeout(r, 1200));
-      await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_07_pm_tareas_operativas.png"), fullPage: true });
+    // En el selector, seleccionar al integrante responsable (proveedor@demo.custodia.app)
+    const assigneeSelect = await page.$("select");
+    assert.ok(assigneeSelect, "El selector de asignación debe aparecer");
+    const vendorOptionVal = await page.evaluate(sel => {
+      const options = Array.from((sel as HTMLSelectElement).options);
+      const opt = options.find(o => o.text.includes("proveedor@demo.custodia.app") || o.text.includes("VENDOR") || o.text.includes("Equipo"));
+      return opt ? opt.value : (options[1] ? options[1].value : "");
+    }, assigneeSelect);
 
-      // Si existe un campo para reportar entrega, simular operario reportando evidencia
-      const deliveryInput = await page.$("input[placeholder*='Notas de evidencia']");
-      if (deliveryInput) {
-        await deliveryInput.type("Suministros colocados e inspección visual completa");
-        for (const rb of await page.$$("button")) {
-          const rText = await page.evaluate(el => el.textContent, rb);
-          if (rText && rText.includes("Solicitar Verificación")) {
-            await rb.click();
-            await new Promise(r => setTimeout(r, 1500));
-            break;
-          }
-        }
-      }
+    assert.ok(vendorOptionVal, "Debe existir un integrante disponible para asignar");
+    await assigneeSelect.select(vendorOptionVal);
+    await new Promise(r => setTimeout(r, 500));
 
-      // Si hay tarea pendiente de revisión, PM aprueba verificación
-      for (const ab of await page.$$("button")) {
-        const aText = await page.evaluate(el => el.textContent, ab);
-        if (aText && aText.includes("Aprobar Verificación")) {
-          await ab.click();
-          await new Promise(r => setTimeout(r, 1500));
-          await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_07b_pm_tarea_aprobada.png"), fullPage: true });
-          break;
-        }
+    let clickedConfirmAssign = false;
+    for (const cb of await page.$$("button")) {
+      const cText = await page.evaluate(el => el.textContent, cb);
+      if (cText && cText.includes("Confirmar")) {
+        await cb.click();
+        clickedConfirmAssign = true;
+        await new Promise(r => setTimeout(r, 2500));
+        break;
       }
     }
+    assert.ok(clickedConfirmAssign, "El botón Confirmar asignación debe ser clickeado");
+
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_06_pm_llegadas_asignacion.png"), fullPage: true });
+
+    // Verificar en BD que la tarea operativa quedó generada en estado ASSIGNED
+    const dbTask = (await pool.query(
+      `SELECT id, title, status, "assigneeId", "sourceId" FROM "OperationalTask" 
+       WHERE "propertyId" = $1 AND "sourceId" = $2 AND status != 'CANCELLED' 
+       ORDER BY "createdAt" DESC LIMIT 1`,
+      [PROPERTY_ID, targetStay.id]
+    )).rows[0];
+
+    assert.ok(dbTask, "Debe existir una tarea operativa ligada a la estancia");
+    console.log("Tarea operativa asignada en BD:", dbTask);
+
+    // 3. CAMBIO DE SESIÓN: Responsable (proveedor@demo.custodia.app) inicia sesión en el navegador
+    console.log("\n--- 3C. Responsable inicia su propia sesión, abre la tarea y entrega evidencia ---");
+    await page.deleteCookie({ name: pmCookie.name });
+    const vendorCookie = await getCookies("proveedor@demo.custodia.app");
+    await page.setCookie(vendorCookie);
+    await page.setCookie({
+      name: "custodia_active_tenant",
+      value: "63ba31f2-cf6a-4f05-a8f7-06393d6222a8",
+      domain: "localhost",
+      path: "/",
+    });
+
+    // Responsable navega a la ficha de la propiedad y abre pestaña 'Tareas'
+    await page.goto(`${BASE_URL}/propiedades/${PROPERTY_ID}`, { waitUntil: "networkidle2" });
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll("button[role='tab']"));
+      const tab = tabs.find(t => t.textContent && t.textContent.includes("Tareas Operativas"));
+      if (tab) (tab as HTMLButtonElement).click();
+    });
+    await new Promise(r => setTimeout(r, 1500));
+
+    // Responsable escribe notas de evidencia y solicita verificación
+    const deliveryInput = await page.$("input[placeholder*='Notas de evidencia']");
+    assert.ok(deliveryInput, "El campo de evidencia para el operario debe estar disponible");
+    await deliveryInput.click({ clickCount: 3 });
+    await deliveryInput.type("Insumos colocados en cocina y baños. Limpieza completa e inspección realizada.");
+
+    let requestedVerification = false;
+    for (const rb of await page.$$("button")) {
+      const rText = await page.evaluate(el => el.textContent, rb);
+      if (rText && rText.includes("Solicitar Verificación")) {
+        await rb.click();
+        requestedVerification = true;
+        await new Promise(r => setTimeout(r, 2000));
+        break;
+      }
+    }
+    assert.strictEqual(requestedVerification, true, "El operario debe solicitar verificación desde el botón");
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_07a_responsable_entrega_evidencia.png"), fullPage: true });
+
+    // Verificar en BD que la tarea pasó a VERIFICATION_PENDING
+    const dbTaskPending = (await pool.query(
+      `SELECT status FROM "OperationalTask" WHERE id = $1`,
+      [dbTask.id]
+    )).rows[0];
+    assert.strictEqual(dbTaskPending?.status, "VERIFICATION_PENDING", "La tarea debe quedar en VERIFICATION_PENDING tras la entrega");
+
+    // 4. CAMBIO DE SESIÓN: PM reingresa para dictaminar y verificar la tarea
+    console.log("\n--- 3D. PM inicia sesión, revisa evidencia y aprueba verificación técnica ---");
+    await page.deleteCookie({ name: vendorCookie.name });
+    await page.setCookie(pmCookie);
+    await page.setCookie({
+      name: "custodia_active_tenant",
+      value: "63ba31f2-cf6a-4f05-a8f7-06393d6222a8",
+      domain: "localhost",
+      path: "/",
+    });
+
+    await page.goto(`${BASE_URL}/propiedades/${PROPERTY_ID}`, { waitUntil: "networkidle2" });
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll("button[role='tab']"));
+      const tab = tabs.find(t => t.textContent && t.textContent.includes("Tareas Operativas"));
+      if (tab) (tab as HTMLButtonElement).click();
+    });
+    await new Promise(r => setTimeout(r, 1500));
+
+    // PM escribe notas de dictamen y aprueba verificación
+    const reviewNotesInput = await page.$("input[placeholder*='Notas de dictamen']");
+    if (reviewNotesInput) {
+      await reviewNotesInput.type("Inspección de insumos conforme a estándar de hospitalidad.");
+    }
+
+    let approvedVerification = false;
+    for (const ab of await page.$$("button")) {
+      const aText = await page.evaluate(el => el.textContent, ab);
+      if (aText && aText.includes("Aprobar Verificación")) {
+        await ab.click();
+        approvedVerification = true;
+        await new Promise(r => setTimeout(r, 2000));
+        break;
+      }
+    }
+    assert.strictEqual(approvedVerification, true, "El PM debe pulsar Aprobar Verificación");
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_07b_pm_revision_aprobada.png"), fullPage: true });
+
+    // Verificar en BD que la tarea quedó COMPLETED y que la estancia se actualizó a COMPLETED con checklist cumplido
+    const dbTaskCompleted = (await pool.query(
+      `SELECT status, "verifiedAt" FROM "OperationalTask" WHERE id = $1`,
+      [dbTask.id]
+    )).rows[0];
+    assert.strictEqual(dbTaskCompleted?.status, "COMPLETED", "La tarea debe quedar COMPLETED en BD");
+    assert.ok(dbTaskCompleted?.verifiedAt, "La tarea debe registrar fecha de verificación");
+
+    const dbStayCompleted = (await pool.query(
+      `SELECT status, "checklistJson" FROM "Inspection" WHERE id = $1`,
+      [targetStay.id]
+    )).rows[0];
+    assert.strictEqual(dbStayCompleted?.status, "COMPLETED", "La llegada debe desbloquearse y quedar en status COMPLETED");
+    console.log("Estancia completada en BD tras verificación:", dbStayCompleted);
+
+    // 5. PM revisa la pestaña 'Llegadas' y captura el estado final confirmado
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll("button[role='tab']"));
+      const tab = tabs.find(t => t.textContent && t.textContent.includes("Llegadas & Estancias"));
+      if (tab) (tab as HTMLButtonElement).click();
+    });
+    await new Promise(r => setTimeout(r, 1500));
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_07c_llegada_confirmada.png"), fullPage: true });
 
     // -------------------------------------------------------------------------
     // 4. MÓVIL Y BILINGÜISMO (ES / EN)

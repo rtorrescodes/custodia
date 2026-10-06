@@ -346,6 +346,29 @@ export async function resolveTaskVerificationAction(data: z.infer<typeof resolve
           }
         });
 
+        // Si la tarea operativa de preparación está vinculada a una estancia (STAY), actualizar checklist y estado de preparación
+        if (task.sourceType === "STAY" && task.sourceId) {
+          const stayInspection = await tx.inspection.findUnique({
+            where: { id: task.sourceId, tenantId }
+          });
+          if (stayInspection) {
+            const currentChecklist = (stayInspection.checklistJson as any) || {};
+            const updatedChecklist = {
+              ...currentChecklist,
+              suppliesReady: true,
+              taskVerified: true,
+              verifiedAt: new Date().toISOString()
+            };
+            await tx.inspection.update({
+              where: { id: stayInspection.id },
+              data: {
+                checklistJson: updatedChecklist,
+                status: "COMPLETED", // Lista para llegada (verificada)
+              }
+            });
+          }
+        }
+
         return {
           taskId: completed.id,
           status: completed.status,

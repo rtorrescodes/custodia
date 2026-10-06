@@ -56,6 +56,7 @@ export const getVerifiedIdentity = cache(async (): Promise<VerifiedIdentity | nu
     const { data, error } = await supabase.auth.getUser();
 
     if (error || !data?.user) {
+      console.error("[GET_USER_ERROR]: supabase.auth.getUser failed:", error?.message, error);
       return null;
     }
 

@@ -243,7 +243,111 @@ async function runRealPgConcurrencySuite() {
     console.log(`Transacciones en extracto creadas: ${transactionsInDb.length}`);
     assert.strictEqual(transactionsInDb.length, 1, "Debe existir exactamente 1 movimiento en extracto; cero duplicación");
 
-    console.log("✅ Vector 2 verificado: Idempotencia y atomicidad garantizan cero duplicación contable o de extractos.\n");
+    // -------------------------------------------------------------------------
+    // VECTOR 3: DOS PAGOS SIMULTÁNEOS CONCURRENTES (SALDO, ACTUALCOST Y EXTRACTOS)
+    // -------------------------------------------------------------------------
+    console.log("--- VECTOR 3: DOS PAGOS SIMULTÁNEOS CONCURRENTES ---");
+    const woPayConcur = await prisma.workOrder.create({
+      data: {
+        tenantId: TENANT_ID,
+        propertyId: PROPERTY_ID,
+        reporterId: PM_USER_ID,
+        title: "Reparación Fachada Concurrente",
+        description: "Orden para probar pagos simultáneos",
+        status: "IN_PROGRESS",
+        estimatedCost: new Prisma.Decimal(5000),
+      }
+    });
+
+    // Inyectar fondos suficientes para ambos pagos ($1,000 + $1,000 = $2,000)
+    const payInjectEntry = await accountingService.postEntry({
+      tenantId: TENANT_ID,
+      idempotencyKey: `pay-concur-setup-${Date.now()}`,
+      effectiveDate: new Date(),
+      description: "Fondos para pagos concurrentes",
+      createdById: PM_USER_ID,
+      lines: [
+        {
+          accountId: accounts.cashPmEscrow,
+          debit: 2000,
+          credit: 0,
+          currency: "MXN",
+          propertyId: PROPERTY_ID,
+          ownerId: OWNER_USER_ID,
+        },
+        {
+          accountId: accounts.ownerFundsPayable,
+          debit: 0,
+          credit: 2000,
+          currency: "MXN",
+          propertyId: PROPERTY_ID,
+          ownerId: OWNER_USER_ID,
+        }
+      ]
+    });
+
+    const refP1 = `SPEI-CONCUR-P1-${Date.now()}`;
+    const refP2 = `SPEI-CONCUR-P2-${Date.now()}`;
+
+    // Disparar dos pagos simultáneos de $1,000 cada uno
+    const [pay1Res, pay2Res] = await Promise.all([
+      propertyOperationsService.recordVendorPayment(TENANT_ID, PM_USER_ID, {
+        workOrderId: woPayConcur.id,
+        amount: 1000,
+        isFinalPayment: false,
+        reference: refP1,
+      }),
+      propertyOperationsService.recordVendorPayment(TENANT_ID, PM_USER_ID, {
+        workOrderId: woPayConcur.id,
+        amount: 1000,
+        isFinalPayment: false,
+        reference: refP2,
+      })
+    ]);
+
+    console.log("Resultados de pagos simultáneos:", {
+      pay1: { paid: pay1Res.paidAmount, total: pay1Res.totalPaidSoFar },
+      pay2: { paid: pay2Res.paidAmount, total: pay2Res.totalPaidSoFar }
+    });
+
+    // Verificar en BD que actualCost acumulado de la orden es exactamente $2,000
+    const woUpdatedPostPay = await prisma.workOrder.findUnique({
+      where: { id: woPayConcur.id }
+    });
+    console.log("Costo acumulado final de la orden en BD:", Number(woUpdatedPostPay?.actualCost));
+    assert.strictEqual(Number(woUpdatedPostPay?.actualCost), 2000, "actualCost debe ser exactamente 2000 tras dos pagos de 1000");
+
+    // Verificar que existen exactamente 2 transacciones en Transaction para esta orden
+    const txCount = await prisma.transaction.count({
+      where: { tenantId: TENANT_ID, workOrderId: woPayConcur.id }
+    });
+    assert.strictEqual(txCount, 2, "Deben existir exactamente 2 transacciones");
+
+    // Limpieza de datos de vector 3
+    await prisma.transaction.deleteMany({ where: { workOrderId: woPayConcur.id } });
+    await prisma.journalLine.deleteMany({
+      where: {
+        entry: {
+          idempotencyKey: { in: [
+            `vendor-pay-wo-${woPayConcur.id}-${refP1}`,
+            `vendor-pay-wo-${woPayConcur.id}-${refP2}`
+          ]}
+        }
+      }
+    });
+    await prisma.journalEntry.deleteMany({
+      where: {
+        idempotencyKey: { in: [
+          `vendor-pay-wo-${woPayConcur.id}-${refP1}`,
+          `vendor-pay-wo-${woPayConcur.id}-${refP2}`
+        ]}
+      }
+    });
+    await prisma.journalLine.deleteMany({ where: { entryId: payInjectEntry.id } });
+    await prisma.journalEntry.delete({ where: { id: payInjectEntry.id } });
+    await prisma.workOrder.delete({ where: { id: woPayConcur.id } });
+
+    console.log("✅ Vector 3 verificado: Pagos simultáneos concurrentes actualizan correctamente actualCost, asientos y extractos.\n");
 
     console.log("================================================================================");
     console.log("🎉 SUITE DE CONCURRENCIA POSTGRESQL EXITOSA: VALIDACIÓN REAL SIN SIMULACIONES");

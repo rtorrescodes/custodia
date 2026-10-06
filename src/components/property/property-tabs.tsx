@@ -812,9 +812,21 @@ export function PropertyTabs({
                           <h4 className="font-bold text-sm text-foreground">{s.responsable}</h4>
                           <p className="text-xs text-muted-foreground">{s.notas || "Sin notas adicionales."}</p>
                         </div>
-                        <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-lg">
-                          📅 {new Date(s.fecha).toLocaleDateString()}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] font-semibold ${
+                              s.estado === "COMPLETED"
+                                ? "text-emerald-600 border-emerald-500/30 bg-emerald-500/10"
+                                : "text-amber-600 border-amber-500/30 bg-amber-500/10"
+                            }`}
+                          >
+                            {s.estado === "COMPLETED" ? "✓ Lista para llegada" : "⏳ Preparación Bloqueada"}
+                          </Badge>
+                          <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-lg">
+                            📅 {new Date(s.fecha).toLocaleDateString()}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="rounded-lg bg-muted/30 p-3 text-xs space-y-2 border border-border/50">

@@ -284,6 +284,7 @@ model WorkOrder {
   quotes        WorkOrderQuote[]
   alddeaPass    AlddeaPassDelegation?
   contributions OwnerContribution[]
+  transactions  Transaction[]
 }
 
 enum WOPriority {
@@ -313,13 +314,19 @@ model Transaction {
   type             TxType // INCOME, EXPENSE
   category         String
   description      String
+  workOrderId      String?
+  paymentKey       String?
   receiptUrl       String?
   requiresApproval Boolean  @default(false)
   isApproved       Boolean  @default(true)
   createdAt        DateTime @default(now())
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id])
-  property Property @relation(fields: [propertyId], references: [id])
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  property  Property   @relation(fields: [propertyId], references: [id])
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, paymentKey])
+  @@index([tenantId, workOrderId])
 }
 
 enum TxType {

@@ -453,7 +453,7 @@ async function runPersistentFinancialCycleSuite() {
     assert.strictEqual(countEntries, 1, "Solo debe existir un registro con esa idempotencyKey");
     console.log("✅ Paso H verificado: Idempotencia persistente en base de datos previene duplicaciones.");
 
-    // Paso H2: Comprobar deduplicación conjunta en recordVendorPayment
+    // Paso H2: Comprobar deduplicación conjunta en recordVendorPayment por clave estable y workOrderId
     console.log("\nPaso H2: Probando reintento de pago a proveedor con misma referencia (idempotencia en recordVendorPayment)...");
     const duplicateVendorPay = await propertyOperationsService.recordVendorPayment(
       TENANT_ID,
@@ -467,9 +467,69 @@ async function runPersistentFinancialCycleSuite() {
     );
     assert.strictEqual(duplicateVendorPay.idempotentSkip, true, "El reintento con misma referencia debe detectarse como idempotente");
     assert.strictEqual(duplicateVendorPay.paidAmount, pay1Amount, "Monto pagado reportado debe ser idéntico");
-    console.log("✅ Paso H2 verificado: Reintento de pago a proveedor no duplicó asiento ni transacción.");
+    assert.ok(duplicateVendorPay.transactionId, "Debe retornar el transactionId real original");
+    console.log("✅ Paso H2 verificado: Reintento devolvió transactionId original y no duplicó transacción ni asiento.");
 
-    // Probar rechazo ante misma referencia pero importe diferente
+    // Paso H2b: Probar que si el título de la orden cambia, el reintento de pago se sigue reconociendo por la clave estable
+    console.log("\nPaso H2b: Cambiando título de la orden para comprobar que la clave estable no depende del título...");
+    await prisma.workOrder.update({
+      where: { id: testWorkOrderId! },
+      data: { title: "Impermeabilización Techo Suite Real (MODIFICADO POR PM)" }
+    });
+    const reattemptAfterTitleChange = await propertyOperationsService.recordVendorPayment(
+      TENANT_ID,
+      PM_USER_ID,
+      {
+        workOrderId: testWorkOrderId!,
+        amount: pay1Amount,
+        isFinalPayment: false,
+        reference: refPartial,
+      }
+    );
+    assert.strictEqual(reattemptAfterTitleChange.idempotentSkip, true, "Debe seguir siendo idempotente aun con título modificado");
+    console.log("✅ Paso H2b verificado: Clave estable inmune a cambios de título de la orden.");
+
+    // Paso H2c: Probar que dos órdenes distintas con el mismo título y la misma referencia NO se confunden
+    console.log("\nPaso H2c: Creando segunda orden con mismo título y probando pago con misma referencia de texto...");
+    const woTwin = await prisma.workOrder.create({
+      data: {
+        tenantId: TENANT_ID,
+        propertyId: PROPERTY_ID,
+        reporterId: PM_USER_ID,
+        title: "Impermeabilización Techo Suite Real (MODIFICADO POR PM)",
+        description: "Orden gemela en otra suite",
+        status: "IN_PROGRESS",
+        estimatedCost: new Prisma.Decimal(2000),
+      }
+    });
+
+    const payTwin = await propertyOperationsService.recordVendorPayment(
+      TENANT_ID,
+      PM_USER_ID,
+      {
+        workOrderId: woTwin.id,
+        amount: 1000,
+        isFinalPayment: false,
+        reference: refPartial, // Misma referencia pero para woTwin
+      }
+    );
+    assert.strictEqual(payTwin.workOrderId, woTwin.id);
+    assert.strictEqual(payTwin.idempotentSkip, undefined); // No es skip, es un pago legítimo de la otra orden
+    assert.notStrictEqual(payTwin.transactionId, duplicateVendorPay.transactionId);
+    console.log("✅ Paso H2c verificado: Dos órdenes distintas no se confunden aunque compartan título y referencia.");
+
+    // Limpieza de woTwin
+    await prisma.transaction.deleteMany({ where: { workOrderId: woTwin.id } });
+    await prisma.journalLine.deleteMany({
+      where: { entry: { idempotencyKey: `vendor-pay-wo-${woTwin.id}-${refPartial}` } }
+    });
+    await prisma.journalEntry.deleteMany({
+      where: { idempotencyKey: `vendor-pay-wo-${woTwin.id}-${refPartial}` }
+    });
+    await prisma.workOrder.delete({ where: { id: woTwin.id } });
+
+    // Paso H2d: Probar rechazo ante misma clave con importe diferente
+    console.log("\nPaso H2d: Probando rechazo de misma clave con importe discrepante...");
     let conflictCaught = false;
     try {
       await propertyOperationsService.recordVendorPayment(
@@ -488,7 +548,18 @@ async function runPersistentFinancialCycleSuite() {
       }
     }
     assert.strictEqual(conflictCaught, true, "Debe rechazar con error si la referencia ya existe con diferente monto");
-    console.log("✅ Paso H2b verificado: Conflicto de importe en misma referencia rechazado correctamente.");
+    console.log("✅ Paso H2d verificado: Conflicto de importe en misma clave estable rechazado correctamente.");
+
+    // Paso H3: Probar reaprobación idempotente de cotización (approveQuote)
+    console.log("\nPaso H3: Probando reaprobación de cotización ya aprobada...");
+    const reapproveRes = await propertyOperationsService.approveQuote(
+      TENANT_ID,
+      OWNER_USER_ID,
+      { quoteId: testQuoteId!, expectedVersion: 1 }
+    );
+    assert.strictEqual(reapproveRes.idempotentSkip, true, "Reaprobar misma versión debe retornar idempotentSkip");
+    assert.strictEqual(reapproveRes.version, 1);
+    console.log("✅ Paso H3 verificado: Reaprobar misma versión es completamente idempotente.");
 
     console.log("\n================================================================================");
     console.log("🎉 SUITE DE CICLO FINANCIERO PERSISTENTE PASADA EXITOSAMENTE EN POSTGRESQL REAL");
