@@ -3,14 +3,15 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 async function main() {
-  const pkgDir = path.resolve('release-evidence-final');
+  const pkgDir = path.resolve('release-evidence-562cf1c');
+  if (fs.existsSync(pkgDir)) fs.rmSync(pkgDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(pkgDir, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(pkgDir, 'logs'), { recursive: true });
   fs.mkdirSync(path.join(pkgDir, 'screenshots'), { recursive: true });
   fs.mkdirSync(path.join(pkgDir, 'audits'), { recursive: true });
 
-  console.log('1. Copying scripts, patch, and reports...');
-  fs.copyFileSync('tests/evidence_git_diff.patch', path.join(pkgDir, 'diff-financial-evidence.patch'));
+  console.log('1. Generating real git diff and copying scripts...');
+  execSync('git diff 6484b5ae9e22239c4171def20b1554e916ac1ab1..HEAD > ' + path.join(pkgDir, 'diff-financial-evidence.patch'));
   fs.copyFileSync('tests/test-persistent-financial-cycle.ts', path.join(pkgDir, 'scripts', 'test-persistent-financial-cycle.ts'));
   fs.copyFileSync('tests/test-pg-concurrency-orders.ts', path.join(pkgDir, 'scripts', 'test-pg-concurrency-orders.ts'));
   fs.copyFileSync('tests/test-resource-evidence-auth.ts', path.join(pkgDir, 'scripts', 'test-resource-evidence-auth.ts'));
@@ -59,9 +60,9 @@ async function main() {
     fs.writeFileSync(path.join(pkgDir, 'audits', 'trivy-fs-scan.log'), 'Trivy CLI no disponible en entorno anfitrion Windows. Auditoria estatica identificada formalmente como no ejecutada localmente.', 'utf8');
   }
 
-  console.log('8. Compressing release-evidence-22c052ef.zip...');
-  execSync('powershell -Command "Compress-Archive -Path release-evidence-final/* -DestinationPath release-evidence-22c052ef.zip -Force"');
-  console.log('✅ PAQUETE GENERADO Y COMPRIMIDO EXITOSAMENTE: release-evidence-22c052ef.zip');
+  console.log('8. Compressing release-evidence-562cf1c.zip...');
+  execSync('powershell -Command "Compress-Archive -Path release-evidence-562cf1c/* -DestinationPath release-evidence-562cf1c.zip -Force"');
+  console.log('✅ PAQUETE GENERADO Y COMPRIMIDO EXITOSAMENTE: release-evidence-562cf1c.zip');
 }
 
 main().catch(err => {
