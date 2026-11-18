@@ -1,0 +1,47 @@
+[
+  {
+    "name": "Ficha Inmueble (Cold SSR)",
+    "duration": 1154,
+    "status": 200
+  },
+  {
+    "name": "Ficha Inmueble (Warm Run 1)",
+    "duration": 866,
+    "status": 304
+  },
+  {
+    "name": "Ficha Inmueble (Warm Run 2)",
+    "duration": 1147,
+    "status": 304
+  },
+  {
+    "name": "Cartera (Cold SSR)",
+    "duration": 865,
+    "status": 304
+  },
+  {
+    "name": "Cartera (Warm Run 1)",
+    "duration": 1148,
+    "status": 304
+  },
+  {
+    "name": "Cartera (Warm Run 2)",
+    "duration": 866,
+    "status": 304
+  },
+  {
+    "name": "Portal Propietario (Cold SSR)",
+    "duration": 1151,
+    "status": 200
+  },
+  {
+    "name": "Portal Propietario (Warm Run 1)",
+    "duration": 865,
+    "status": 200
+  },
+  {
+    "name": "Portal Propietario (Warm Run 2)",
+    "duration": 1144,
+    "status": 200
+  }
+]

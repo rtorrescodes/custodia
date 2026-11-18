@@ -1,0 +1,1340 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------
+// Core & Multi-Tenant Setup
+// ---------------------------------------------------------
+model Tenant {
+  id          String @id @default(uuid())
+  name        String
+  countryCode String // For localization
+  currency    String // e.g., MXN, USD
+  timezone    String
+
+  // Platform SaaS Billing
+  stripeCustomerId   String?
+  subscriptionPlan   String  @default("FREE")
+  subscriptionStatus String  @default("ACTIVE") // ACTIVE, PAST_DUE, CANCELED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  operatingMode OperatingMode @default(LANDLORD)
+
+  users        User[]
+  members      TenantMember[]
+  portfolios   Portfolio[]
+  invitations  TenantInvitation[]
+  properties   Property[]
+  workOrders   WorkOrder[]
+  transactions Transaction[]
+  integrations TenantIntegration[]
+  addons       TenantAddon[]
+  leases       Lease[]
+  vendors      TenantVendor[]
+  accounts     LedgerAccount[]
+  journalEntries JournalEntry[]
+  charges      Charge[]
+  payments     Payment[]
+  receipts     Receipt[]
+  bankStatements BankStatement[]
+  webhookEvents WebhookEvent[]
+  contractDocuments ContractDocument[]
+  inspections   Inspection[]
+  agreements   ManagementAgreement[]
+  settlementProposals SettlementProposal[]
+  unitAssets    UnitAsset[]
+  workOrderQuotes WorkOrderQuote[]
+  alddeaPassDelegations AlddeaPassDelegation[]
+  communicationThreads CommunicationThread[]
+  monthlyClosings       MonthlyClosing[]
+  internalNotifications InternalNotification[]
+}
+
+model User {
+  id            String          @id @default(uuid())
+  tenantId      String
+  email         String
+  passwordHash  String
+  role          UserRole // SUPER_ADMIN, ADMIN, MANAGER, STAFF, VENDOR, OWNER
+  mfaEnabled    Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  properties    PropertyOwner[]
+  assignedTasks WorkOrder[]     @relation("AssignedStaff")
+  leases        Lease[]         @relation("LeasedProperties")
+
+  // Multi-organization memberships & invitations (CUS-01)
+  memberships        TenantMember[]
+  createdInvitations TenantInvitation[] @relation("CreatedInvitations")
+  journalLines       JournalLine[]      @relation("OwnerJournalLines")
+  settlementProposals SettlementProposal[] @relation("OwnerSettlements")
+
+  @@unique([tenantId, email])
+}
+
+enum OperatingMode {
+  LANDLORD
+  PROPERTY_MANAGER
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  STAFF
+  VENDOR
+  OWNER
+  RENTER
+}
+
+enum MemberRole {
+  PM_ADMIN
+  PM_STAFF
+  LANDLORD
+  OWNER
+  RENTER
+  VENDOR
+}
+
+enum MemberStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  REVOKED
+}
+
+model TenantMember {
+  id        String       @id @default(uuid())
+  tenantId  String
+  userId    String
+  role      MemberRole   @default(PM_ADMIN)
+  status    MemberStatus @default(ACTIVE)
+  joinedAt  DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  portfolioAccesses MemberPortfolioAccess[]
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, status])
+  @@index([userId])
+}
+
+model Portfolio {
+  id          String   @id @default(uuid())
+  tenantId    String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant     Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  properties Property[]
+  members    MemberPortfolioAccess[]
+
+  @@index([tenantId])
+}
+
+model MemberPortfolioAccess {
+  id          String @id @default(uuid())
+  memberId    String
+  portfolioId String
+
+  member    TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  portfolio Portfolio    @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, portfolioId])
+}
+
+model TenantInvitation {
+  id          String       @id @default(uuid())
+  tenantId    String
+  email       String
+  role        MemberRole
+  tokenHash   String       @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdById String
+  createdAt   DateTime     @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User   @relation("CreatedInvitations", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, email])
+  @@index([tokenHash])
+}
+
+enum ManagementType {
+  OWNED
+  THIRD_PARTY
+  PENDING_REVIEW
+}
+
+enum FundCustodian {
+  LANDLORD
+  PM_ESCROW
+  DIRECT_OWNER
+  UNDETERMINED
+}
+
+// ---------------------------------------------------------
+// Properties & Ownership
+// ---------------------------------------------------------
+model Property {
+  id              String   @id @default(uuid())
+  tenantId        String
+  name            String
+  address         String
+  fraccionamiento String? // Optional relation to Alddea
+  alddeaId        String? // External ID for Alddea integration
+  ravsisId        String? // External ID for RAVSIS integration
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // CUS-01 hierarchy, ownership & lifecycle
+  portfolioId    String?
+  parentId       String?
+  isUnit         Boolean        @default(false)
+  unitNumber     String?
+  managementType ManagementType @default(PENDING_REVIEW)
+  fundCustodian  FundCustodian  @default(UNDETERMINED)
+  archivedAt     DateTime?
+
+  // CUS-09: Control Operativo
+  occupancyStatus       OccupancyStatus @default(VACANT)
+  primaryManagerId      String?
+  careVisitIntervalDays Int             @default(15) // Frecuencia de visitas preventivas en días
+  lastCareVisitAt       DateTime?
+
+  // CUS-10: Gestión Integral de Rentas (Multitipo Residencial / Comercial / Industrial)
+  propertyType          PropertyType    @default(RESIDENTIAL_APARTMENT)
+  commercialSpecs       Json?           // { rentableAreaM2, parkingSpots, camFeeMonthly, kvaCapacity, loadingDocks, clearHeightMeters }
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  portfolio    Portfolio?      @relation(fields: [portfolioId], references: [id], onDelete: SetNull)
+  parent       Property?       @relation("PropertyUnits", fields: [parentId], references: [id], onDelete: SetNull)
+  units        Property[]      @relation("PropertyUnits")
+  owners       PropertyOwner[]
+  workOrders   WorkOrder[]
+  transactions Transaction[]
+  leases       Lease[]
+  vaults       PropertyVault[]
+  charges      Charge[]
+  agreements   ManagementAgreement[]
+  journalLines JournalLine[]
+  settlementProposals SettlementProposal[]
+  inspections  Inspection[]
+  unitAssets   UnitAsset[]
+  communicationThreads CommunicationThread[]
+  alddeaPassDelegations AlddeaPassDelegation[]
+  tasks        OperationalTask[]
+  contributions OwnerContribution[]
+  supplies     SupplyInventory[]
+}
+
+enum OccupancyStatus {
+  VACANT
+  OWNER_OCCUPIED
+  RENTED
+  UNDER_MAINTENANCE
+}
+
+enum PropertyType {
+  RESIDENTIAL_APARTMENT
+  RESIDENTIAL_HOUSE
+  BUILDING
+  COMMERCIAL_OFFICE
+  COMMERCIAL_RETAIL
+  INDUSTRIAL_WAREHOUSE
+  OTHER
+}
+
+model PropertyOwner {
+  propertyId     String
+  userId         String
+  ownershipShare Decimal @default(100.00) // Support for co-ownership
+
+  property Property @relation(fields: [propertyId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@id([propertyId, userId])
+}
+
+// ---------------------------------------------------------
+// Work Orders & Maintenance
+// ---------------------------------------------------------
+model WorkOrder {
+  id            String   @id @default(uuid())
+  tenantId      String
+  propertyId    String
+  reporterId    String?  // Inquilino o usuario reportante
+  assignedToId  String?  // Proveedor o staff asignado
+  category      String   @default("GENERAL") // PLUMBING, ELECTRICAL, HVAC, APPLIANCE, MASONRY, LOCKSMITH, GENERAL
+  priority      WOPriority @default(MEDIUM)
+  title         String
+  description   String
+  status        WOStatus @default(PENDING)
+  estimatedCost Decimal?
+  actualCost    Decimal?
+  cancellationReason String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id])
+  property   Property            @relation(fields: [propertyId], references: [id])
+  assignedTo User?               @relation("AssignedStaff", fields: [assignedToId], references: [id])
+  evidences  FileEvidence[]
+  quotes        WorkOrderQuote[]
+  alddeaPass    AlddeaPassDelegation?
+  contributions OwnerContribution[]
+  transactions  Transaction[]
+}
+
+enum WOPriority {
+  LOW
+  MEDIUM
+  HIGH
+  EMERGENCY
+}
+
+enum WOStatus {
+  PENDING
+  IN_PROGRESS
+  AWAITING_APPROVAL
+  COMPLETED
+  CANCELLED
+}
+
+// ---------------------------------------------------------
+// Finances & Ledger (Trust Accounting)
+// ---------------------------------------------------------
+model Transaction {
+  id               String   @id @default(uuid())
+  tenantId         String
+  propertyId       String
+  amount           Decimal
+  currency         String
+  type             TxType // INCOME, EXPENSE
+  category         String
+  description      String
+  workOrderId      String?
+  paymentKey       String?
+  receiptUrl       String?
+  requiresApproval Boolean  @default(false)
+  isApproved       Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  property  Property   @relation(fields: [propertyId], references: [id])
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, paymentKey])
+  @@index([tenantId, workOrderId])
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+// ---------------------------------------------------------
+// Integrations & Webhooks
+// ---------------------------------------------------------
+model TenantIntegration {
+  id        String   @id @default(uuid())
+  tenantId  String
+  provider  String // ALDDEA, RAVSIS, STRIPE_CONNECT, MERCADOPAGO
+  isActive  Boolean  @default(false)
+  config    Json // Non-sensitive config (e.g. connected account ID)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, provider])
+}
+
+model TenantAddon {
+  tenantId  String
+  addon     PlatformAddon
+  isActive  Boolean       @default(true)
+  expiresAt DateTime?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@id([tenantId, addon])
+}
+
+enum PlatformAddon {
+  MANTENIMIENTO
+  PORTAL_INQUILINOS
+  CONSERJE_IA
+  PORTAL_DUEÑOS
+}
+
+// ---------------------------------------------------------
+// Property Vault (Bóveda)
+// ---------------------------------------------------------
+model PropertyVault {
+  id           String    @id @default(uuid())
+  propertyId   String
+  type         VaultType
+  keyName      String // e.g. "Main Door", "WiFi Network"
+  keyValue     String // Encrypted at application level
+  instructions String? // Optional context
+  isRotated    Boolean   @default(false)
+  lastRotatedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  property   Property           @relation(fields: [propertyId], references: [id])
+  accessLogs VaultAccessAudit[]
+}
+
+model VaultAccessAudit {
+  id        String   @id @default(uuid())
+  tenantId  String
+  vaultId   String
+  userId    String
+  action    String   // REVEAL, ROTATE, UPDATE
+  createdAt DateTime @default(now())
+
+  vault PropertyVault @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+
+  @@index([vaultId, createdAt])
+  @@index([tenantId, userId])
+}
+
+enum VaultType {
+  WIFI
+  SMART_LOCK
+  ALARM
+  LOCKBOX
+  OTHER
+}
+
+// ---------------------------------------------------------
+// B2B Vendors (Proveedores)
+// ---------------------------------------------------------
+model VendorCategory {
+  id      String   @id @default(uuid())
+  name    String   @unique
+  vendors Vendor[]
+}
+
+model Vendor {
+  id          String  @id @default(uuid())
+  name        String
+  contactName String?
+  email       String?
+  phone       String?
+  categoryId  String?
+
+  // Alddea features
+  isPublic   Boolean @default(false)
+  isVerified Boolean @default(false)
+  rating     Float   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  category VendorCategory? @relation(fields: [categoryId], references: [id])
+  tenants  TenantVendor[]
+}
+
+model TenantVendor {
+  tenantId   String
+  vendorId   String
+  isFavorite Boolean @default(false)
+  notes      String? // Private notes by the PM
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@id([tenantId, vendorId])
+}
+
+model FileEvidence {
+  id          String   @id @default(uuid())
+  workOrderId String
+  fileUrl     String // Google Cloud Storage URL
+  fileType    String
+  createdAt   DateTime @default(now())
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+}
+
+// ---------------------------------------------------------
+// Leases & Renters (Phase 2)
+// ---------------------------------------------------------
+model Lease {
+  id         String @id @default(uuid())
+  tenantId   String
+  propertyId String
+  renterId   String
+
+  startDate     DateTime
+  endDate       DateTime
+  rentAmount    Decimal
+  currency      String   @default("MXN")
+  depositAmount Decimal?
+  paymentDay    Int // Day of the month rent is due (e.g. 1)
+
+  // CUS-10: Reglas de Cobranza, Mora y Firma Digital
+  gracePeriodDays    Int?            @default(5)    // Días de gracia antes de aplicar mora
+  lateFeePercentage  Decimal?        // Recargo porcentual sobre la renta (e.g. 5%)
+  lateFeeFixedAmount Decimal?        // Recargo fijo por mora (e.g. $500 MXN)
+  signedAt           DateTime?       // Fecha y hora de firma digital del inquilino
+  signatureAuditJson Json?           // { signedBy, signerEmail, ipAddress, userAgent, consentText, timestamp }
+
+  status LeaseStatus @default(DRAFT) // DRAFT -> PENDING_SIGNATURE -> ACTIVE -> ENDED
+
+  // Payment Provider bindings
+  stripeSubId      String?
+  mercadoPagoSubId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id])
+  property  Property        @relation(fields: [propertyId], references: [id])
+  renter    User            @relation("LeasedProperties", fields: [renterId], references: [id])
+  evidences LeaseEvidence[]
+  charges   Charge[]
+  payments  Payment[]
+  receipts  Receipt[]
+  contractDocuments ContractDocument[]
+  inspections Inspection[]
+  journalLines JournalLine[]
+}
+
+enum LeaseStatus {
+  DRAFT
+  PENDING_SIGNATURE
+  ACTIVE
+  ENDED
+}
+
+model LeaseEvidence {
+  id        String      @id @default(uuid())
+  leaseId   String
+  fileUrl   String // Google Cloud Storage URL
+  type      LeaseEvType // MOVE_IN, MOVE_OUT, CONTRACT_PDF
+  notes     String?
+  createdAt DateTime    @default(now())
+
+  lease Lease @relation(fields: [leaseId], references: [id])
+}
+
+enum LeaseEvType {
+  MOVE_IN
+  MOVE_OUT
+  CONTRACT_PDF
+}
+
+// ---------------------------------------------------------
+// CUS-02 Financial Engine & Trust Accounting Models
+// ---------------------------------------------------------
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model LedgerAccount {
+  id          String      @id @default(uuid())
+  tenantId    String
+  code        String      // e.g. 1000_CASH_PM_ESCROW, 1010_CASH_DIRECT_OWNER, 2000_DEPOSITS
+  name        String
+  type        AccountType
+  currency    String      @default("MXN")
+  createdAt   DateTime    @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  journalLines JournalLine[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, type])
+}
+
+enum EntryStatus {
+  POSTED
+  REVERSED
+}
+
+model JournalEntry {
+  id             String       @id @default(uuid())
+  tenantId       String
+  idempotencyKey String
+  effectiveDate  DateTime
+  description    String
+  status         EntryStatus  @default(POSTED)
+  reversedById   String?      @unique
+  createdById    String?
+  createdAt      DateTime     @default(now())
+
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines     JournalLine[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, effectiveDate])
+}
+
+model JournalLine {
+  id         String   @id @default(uuid())
+  entryId    String
+  accountId  String
+  debit      Decimal  @default(0)
+  credit     Decimal  @default(0)
+  currency   String   @default("MXN")
+  propertyId String?
+  leaseId    String?
+  ownerId    String?
+  createdAt  DateTime @default(now())
+
+  entry    JournalEntry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account  LedgerAccount @relation(fields: [accountId], references: [id])
+  property Property?     @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  lease    Lease?        @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  owner    User?         @relation("OwnerJournalLines", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([entryId])
+  @@index([accountId])
+  @@index([propertyId])
+  @@index([ownerId])
+}
+
+enum ChargeType {
+  RENT
+  MAINTENANCE_FEE
+  LATE_FEE
+  SECURITY_DEPOSIT
+  UTILITY
+  OTHER
+}
+
+enum ChargeStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+model Charge {
+  id          String       @id @default(uuid())
+  tenantId    String
+  leaseId     String
+  propertyId  String
+  concept     String
+  type        ChargeType   @default(RENT)
+  amount      Decimal
+  currency    String       @default("MXN")
+  dueDate     DateTime
+  periodMonth Int
+  periodYear  Int
+  status      ChargeStatus @default(PENDING)
+  amountPaid  Decimal      @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lease        Lease                @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  property     Property             @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  applications PaymentApplication[]
+
+  @@unique([leaseId, periodYear, periodMonth, type])
+  @@index([tenantId, status])
+  @@index([propertyId])
+}
+
+enum PaymentStatus {
+  REPORTED
+  CONFIRMED
+  CLEARED
+  REVERSED
+}
+
+enum PaymentMethod {
+  TRANSFER
+  CASH
+  CARD
+  STRIPE
+  OTHER
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  tenantId      String
+  leaseId       String?
+  payerName     String
+  amount        Decimal
+  currency      String        @default("MXN")
+  status        PaymentStatus @default(REPORTED)
+  method        PaymentMethod @default(TRANSFER)
+  reference     String?
+  receiptUrl    String?
+  notes         String?
+  reportedById  String?       // Inquilino que reporta el pago
+  confirmedAt   DateTime?
+  confirmedById String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lease        Lease?               @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  applications PaymentApplication[]
+  receipt      Receipt?
+
+  @@index([tenantId, status])
+  @@index([leaseId])
+}
+
+model PaymentApplication {
+  id            String   @id @default(uuid())
+  paymentId     String
+  chargeId      String
+  amountApplied Decimal
+  appliedAt     DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  charge  Charge  @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([chargeId])
+}
+
+enum CommissionType {
+  PERCENTAGE_RENT
+  FIXED_FEE
+  HYBRID
+}
+
+enum CommissionBase {
+  COLLECTED
+  ACCRUED
+}
+
+model ManagementAgreement {
+  id             String         @id @default(uuid())
+  tenantId       String
+  propertyId     String?
+  portfolioId    String?
+  commissionType CommissionType @default(PERCENTAGE_RENT)
+  commissionRate Decimal        @default(0.10) // 10%
+  fixedFeeAmount        Decimal?
+  commissionBase        CommissionBase @default(COLLECTED)
+  reserveMinimum        Decimal        @default(0) // Fondo de reserva mínimo contractual
+  pmExpenseLimit        Decimal?       // Límite de gasto autónomo del PM (null = sin configurar, requiere aprobación obligatoria)
+  pmExpenseCurrency     String         @default("MXN")
+  autoApproveCategories String[]       @default([]) // Categorías autorizadas autónomamente
+  emergencyRule         String?        // Regla explícita para emergencias (e.g. "HASTA_2000_CON_EVIDENCIA")
+  configuredById        String?        // Usuario que configuró la política
+  configuredAt          DateTime?      // Fecha de configuración formal
+  effectiveFrom         DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property? @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([propertyId])
+}
+
+enum SettlementStatus {
+  DRAFT
+  APPROVED
+  EXECUTED
+  CANCELLED
+}
+
+model SettlementProposal {
+  id                 String           @id @default(uuid())
+  tenantId           String
+  ownerId            String
+  propertyId         String?
+  periodStart        DateTime
+  periodEnd          DateTime
+  grossCollected     Decimal
+  expensesDeducted   Decimal
+  commissionDeducted Decimal
+  reserveRetained    Decimal
+  netPayable         Decimal
+  currency           String           @default("MXN")
+  status             SettlementStatus @default(DRAFT)
+  approvedById       String?
+  executedAt         DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  owner    User      @relation("OwnerSettlements", fields: [ownerId], references: [id], onDelete: Cascade)
+  property Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([ownerId])
+}
+
+// =========================================================
+// CUS-03: Webhooks durables, Recibos y Conciliación Bancaria
+// =========================================================
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  DEAD_LETTER
+}
+
+model WebhookEvent {
+  id           String        @id @default(uuid())
+  tenantId     String
+  provider     String        // STRIPE, MERCADOPAGO, OPENPAY, STP
+  externalId   String?       // ID del evento en Stripe/proveedor (e.g. evt_123)
+  eventType    String        // payment_intent.succeeded, charge.refunded, etc.
+  payload      Json          // Payload bruto recibido
+  status       WebhookStatus @default(RECEIVED)
+  attempts     Int           @default(0)
+  lastError    String?
+  signature    String?
+  receivedAt   DateTime      @default(now())
+  processedAt  DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider, externalId])
+  @@index([tenantId, status])
+  @@index([provider, eventType])
+}
+
+enum ReceiptStatus {
+  ISSUED
+  CANCELED
+}
+
+model Receipt {
+  id             String        @id @default(uuid())
+  tenantId       String
+  paymentId      String        @unique
+  leaseId        String?
+  folio          String        // Consecutivo único formateado: REC-YYYY-000001
+  consecutiveNum Int
+  series         String        @default("REC")
+  issuedAt       DateTime      @default(now())
+  amount         Decimal
+  currency       String        @default("MXN")
+  payerName      String
+  payerTaxId     String?       // RFC o identificador fiscal opcional
+  legalDisclaimer String       @default("Comprobante interno de pago sin validez fiscal (No deducible / No CFDI).")
+  snapshotJson   Json          // Desglose inmutable: cargos cubiertos, folio, fechas, montos
+  status         ReceiptStatus @default(ISSUED)
+  pdfUrl         String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  lease   Lease?   @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, series, consecutiveNum])
+  @@index([tenantId, issuedAt])
+}
+
+enum StatementLineStatus {
+  UNMATCHED
+  PROPOSED
+  MATCHED
+  DISCARDED
+}
+
+model BankStatement {
+  id          String   @id @default(uuid())
+  tenantId    String
+  bankName    String
+  accountNum  String?  // Últimos 4 dígitos o clabe
+  filename    String
+  uploadedAt  DateTime @default(now())
+  totalRows   Int      @default(0)
+  importedById String?
+
+  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines  BankStatementLine[]
+
+  @@index([tenantId])
+}
+
+model BankStatementLine {
+  id             String              @id @default(uuid())
+  statementId    String
+  rowNumber      Int
+  operationDate  DateTime
+  reference      String?
+  concept        String
+  amount         Decimal             // Positivo para abonos, negativo para cargos
+  currency       String              @default("MXN")
+  status         StatementLineStatus @default(UNMATCHED)
+  matchedPaymentId String?
+  matchConfidence Decimal?          // 0.00 a 1.00
+  matchReason    String?
+
+  statement BankStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+
+  @@index([statementId, status])
+}
+
+// =========================================================
+// CUS-04: Contratos, Firma Electrónica e Inspecciones
+// =========================================================
+
+enum DocumentType {
+  LEASE_AGREEMENT
+  ADDENDUM
+  INSPECTION_ACTA
+  TERMINATION
+  OTHER
+}
+
+model ContractDocument {
+  id             String       @id @default(uuid())
+  tenantId       String
+  leaseId        String
+  type           DocumentType @default(LEASE_AGREEMENT)
+  title          String
+  version        Int          @default(1)
+  fileUrl        String?
+  fileSha256     String?      // Hash criptográfico de integridad
+  isLatest       Boolean      @default(true)
+  metadata       Json?        // Clausulado renderizado, campos clave
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lease              Lease               @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  signatureRequests  SignatureRequest[]
+
+  @@index([tenantId, leaseId])
+}
+
+enum SignatureStatus {
+  PENDING
+  SIGNED
+  REJECTED
+  EXPIRED
+}
+
+model SignatureRequest {
+  id           String          @id @default(uuid())
+  documentId   String
+  signerEmail  String
+  signerName   String
+  signerRole   String          // RENTER, LANDLORD, PM, WITNESS
+  provider     String          @default("INTERNAL_DIGITAL") // INTERNAL_DIGITAL, DOCUSIGN, MIFIE
+  status       SignatureStatus @default(PENDING)
+  signatureToken String        @unique
+  signedAt     DateTime?
+  ipAddress    String?
+  userAgent    String?
+  signatureEvidence Json?      // Firma manuscrita vector/base64, hash, auditoría NOM-151/eIDAS
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  document ContractDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, status])
+}
+
+enum InspectionType {
+  MOVE_IN
+  MOVE_OUT
+  ROUTINE
+}
+
+enum InspectionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  DISPUTED
+}
+
+model Inspection {
+  id           String           @id @default(uuid())
+  tenantId     String
+  propertyId   String
+  leaseId      String?
+  type         InspectionType   @default(MOVE_IN)
+  status       InspectionStatus @default(SCHEDULED)
+  inspectorName String
+  inspectionDate DateTime       @default(now())
+  summaryNotes String?
+  checklistJson Json            // Zonas (sala, baño, etc.), condiciones y fotos con hash sha256
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  lease    Lease?   @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, propertyId])
+  @@index([leaseId])
+}
+
+// =========================================================
+// CUS-05: Mantenimiento, Presupuestos, Activos y Alddea
+// =========================================================
+
+model UnitAsset {
+  id             String    @id @default(uuid())
+  tenantId       String
+  propertyId     String
+  name           String    // e.g. "Aire Acondicionado Sala", "Calentador Calorex 40L"
+  category       String    // HVAC, PLUMBING, APPLIANCE, ELECTRICAL, OTHER
+  brand          String?
+  model          String?
+  serialNumber   String?
+  installedAt    DateTime?
+  warrantyExpiresAt DateTime?
+  maintenanceIntervalMonths Int @default(6) // Frecuencia recomendada
+  lastServicedAt DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
+enum QuoteStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  SUPERSEDED
+}
+
+model WorkOrderQuote {
+  id             String      @id @default(uuid())
+  tenantId       String
+  workOrderId    String
+  vendorId       String?
+  version        Int         @default(1)
+  laborCost      Decimal     @default(0)
+  materialCost   Decimal     @default(0)
+  totalCost      Decimal     // Calculado estrictamente en servidor: labor + materials
+  currency       String      @default("MXN")
+  status         QuoteStatus @default(SUBMITTED)
+  itemsJson      Json        // Partidas detalladas: [{ description, qty, unitPrice, amount }]
+  validUntil     DateTime?
+  notes          String?
+  approvedById   String?
+  approvedAt     DateTime?
+  approvalReason String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId, version])
+  @@index([tenantId, status])
+}
+
+enum DelegationStatus {
+  PREPARED
+  EMITTED
+  REVOKED
+  EXPIRED
+}
+
+model AlddeaPassDelegation {
+  id              String           @id @default(uuid())
+  tenantId        String
+  workOrderId     String           @unique
+  propertyId      String
+  visitorName     String
+  visitorCompany  String?
+  purpose         String           // e.g. "Mantenimiento Fontanería - WO #1234"
+  validFrom       DateTime
+  validTo         DateTime
+  delegatedById   String
+  alddeaBridgeUrl String?
+  externalPassId  String?          // ID del pase en Alddea si se emitió
+  status          DelegationStatus @default(PREPARED)
+  isMock          Boolean          @default(true) // Verdadero hasta tener integración bilateral autorizada
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  property  Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId])
+}
+
+// =========================================================
+// CUS-06: Portales, Comunicación y Asistente IA
+// =========================================================
+
+enum ThreadAudience {
+  INTERNAL_TEAM
+  PM_OWNER
+  PM_RENTER
+  PM_VENDOR
+}
+
+model CommunicationThread {
+  id          String         @id @default(uuid())
+  tenantId    String
+  propertyId  String?
+  workOrderId String?
+  audience    ThreadAudience @default(INTERNAL_TEAM)
+  title       String
+  isClosed    Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property Property?              @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  messages CommunicationMessage[]
+
+  @@index([tenantId, audience])
+}
+
+model CommunicationMessage {
+  id          String   @id @default(uuid())
+  threadId    String
+  senderId    String?  // Nulo si fue enviado por IA Conserje
+  senderName  String
+  senderRole  String   // PM_ADMIN, OWNER, RENTER, VENDOR, AI_ASSISTANT
+  content     String
+  isInternal  Boolean  @default(false) // Los mensajes marcados internos no se exponen al inquilino/dueño
+  attachments Json?    // Archivos o fotos adjuntas seguras
+  createdAt   DateTime @default(now())
+
+  thread CommunicationThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
+// =========================================================
+// CUS-07 & CUS-08: Cierre Mensual, Notificaciones y Planes
+// =========================================================
+
+enum ClosingStatus {
+  OPEN
+  IN_REVIEW
+  CLOSED
+  REOPENED
+}
+
+model MonthlyClosing {
+  id             String        @id @default(uuid())
+  tenantId       String
+  periodYear     Int
+  periodMonth    Int
+  currency       String        @default("MXN")
+  status         ClosingStatus @default(OPEN)
+  closedById     String?
+  closedAt       DateTime?
+  reopenedById   String?
+  reopenedAt     DateTime?
+  reopenReason   String?
+  summarySnapshot Json         // Balance: cobrado, gastos reconocidos, comisiones, reservas, distribuible
+  discrepanciesCount Int       @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, periodYear, periodMonth, currency])
+  @@index([tenantId, status])
+}
+
+model InternalNotification {
+  id         String   @id @default(uuid())
+  tenantId   String
+  userId     String?  // Opcional si es broadcast de organización
+  eventType  String   // PAYMENT_RECEIVED, QUOTE_PENDING, LEASE_EXPIRING, TICKET_EMERGENCY
+  title      String
+  message    String
+  linkUrl    String?
+  isRead     Boolean  @default(false)
+  dedupeKey  String?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, isRead])
+  @@index([tenantId, dedupeKey])
+}
+
+// =========================================================
+// CUS-09: Operación Completa, Tareas, Aportaciones e Inventario
+// =========================================================
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  BLOCKED
+  VERIFICATION_PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model OperationalTask {
+  id            String       @id @default(uuid())
+  tenantId      String
+  propertyId    String
+  title         String
+  description   String?
+  priority      TaskPriority @default(MEDIUM)
+  status        TaskStatus   @default(PENDING)
+  assigneeId    String?
+  dueDate       DateTime?
+  blockedReason String?
+  checklistJson Json         @default("[]") // [{ id, text, completed, required }]
+  sourceType    String       @default("MANUAL") // MANUAL, CHAT, INSPECTION, STAY, RECURRENT
+  sourceId      String?
+  completedAt   DateTime?
+  verifiedAt    DateTime?
+  verifiedById  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, propertyId, status])
+  @@index([tenantId, dueDate])
+}
+
+enum ContributionStatus {
+  REQUESTED
+  REPORTED
+  VERIFIED
+  CANCELLED
+}
+
+model OwnerContribution {
+  id                 String             @id @default(uuid())
+  tenantId           String
+  propertyId         String
+  ownerId            String
+  workOrderId        String?            // Afectación directa e inequívoca a una orden de trabajo
+  amount             Decimal            // Importe solicitado
+  reportedAmount     Decimal?           // Importe reportado por el propietario
+  verifiedAmount     Decimal?           // Importe efectivamente recibido y confirmado por el PM
+  currency           String             @default("MXN")
+  reason             String
+  destinationAccount String             @default("PM_ESCROW") // PM_ESCROW, DIRECT_OWNER
+  reference          String?
+  status             ContributionStatus @default(REQUESTED)
+  requestedAt        DateTime           @default(now())
+  reportedAt         DateTime?
+  verifiedAt         DateTime?
+  verifiedById       String?
+  availableAt        DateTime?          // Momento en que los fondos son efectivos en banco
+  evidenceUrl        String?
+  notes              String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  property  Property   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, propertyId, status])
+  @@index([ownerId])
+  @@index([workOrderId])
+}
+
+model SupplyInventory {
+  id           String   @id @default(uuid())
+  tenantId     String
+  propertyId   String
+  item         String   // e.g. "Focos LED 9W", "Pastillas Cloro", "Jabón Huésped"
+  category     String   @default("GENERAL") // CLEANING, MAINTENANCE, GUEST_AMENITY
+  currentStock Int      @default(0)
+  minimumStock Int      @default(1)
+  unit         String   @default("pza")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  property  Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  movements SupplyMovement[]
+
+  @@index([tenantId, propertyId])
+}
+
+enum SupplyMovementType {
+  INFLOW     // Entrada / Compra
+  OUTFLOW    // Consumo / Uso en estancia o mantenimiento
+  ADJUSTMENT // Ajuste justificado
+}
+
+model SupplyMovement {
+  id          String             @id @default(uuid())
+  tenantId    String
+  supplyId    String
+  type        SupplyMovementType
+  quantity    Int                // Cantidad (+ o -)
+  balance     Int                // Existencia resultante
+  reason      String             // Motivo justificado o referencia
+  workOrderId String?
+  createdById String?
+  createdAt   DateTime           @default(now())
+
+  supply SupplyInventory @relation(fields: [supplyId], references: [id], onDelete: Cascade)
+
+  @@index([supplyId, createdAt])
+}
+
+// ---------------------------------------------------------
+// CUS-09C: Persistencia y Deduplicación de Traducciones Honest
+// ---------------------------------------------------------
+model TranslationRecord {
+  id            String   @id @default(uuid())
+  sourceHash    String   // SHA256(sourceLang:targetLang:text) para deduplicación atómica
+  sourceLang    String   // es, en
+  targetLang    String   // es, en
+  originalText  String
+  translatedText String
+  status        String   // TRANSLATED_AI, NOT_AVAILABLE, ERROR
+  provider      String   // deepseek-chat, none
+  isAiGenerated Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@unique([sourceHash])
+  @@index([sourceLang, targetLang])
+}
+
+
+
+
+
+
