@@ -15,7 +15,11 @@ const draftLeaseSchema = z.object({
   endDate: z.string(),
   rentAmount: z.number().min(1),
   depositAmount: z.number().optional(),
-  paymentDay: z.number().min(1).max(31)
+  paymentDay: z.number().min(1).max(31),
+  gracePeriodDays: z.number().min(0).max(30).default(5),
+  lateFeePercentage: z.number().min(0).max(100).optional(),
+  lateFeeFixedAmount: z.number().min(0).optional(),
+  requireDigitalSignature: z.boolean().optional(),
 })
 
 export async function draftLease(input: z.infer<typeof draftLeaseSchema>) {
@@ -74,7 +78,8 @@ export async function draftLease(input: z.infer<typeof draftLeaseSchema>) {
       });
     }
 
-    // Crear el contrato
+    // Crear el contrato (PENDING_SIGNATURE si se requiere firma digital, o ACTIVE de inmediato)
+    const initialStatus = data.requireDigitalSignature ? "PENDING_SIGNATURE" : "ACTIVE";
     const newLease = await prisma.lease.create({
       data: {
         tenantId,
@@ -85,7 +90,10 @@ export async function draftLease(input: z.infer<typeof draftLeaseSchema>) {
         rentAmount: data.rentAmount,
         depositAmount: data.depositAmount || null,
         paymentDay: data.paymentDay,
-        status: "ACTIVE"
+        gracePeriodDays: data.gracePeriodDays,
+        lateFeePercentage: data.lateFeePercentage !== undefined ? data.lateFeePercentage : null,
+        lateFeeFixedAmount: data.lateFeeFixedAmount !== undefined ? data.lateFeeFixedAmount : null,
+        status: initialStatus
       }
     });
 
@@ -422,5 +430,42 @@ export async function executeRecurringObligationAction(input: z.infer<typeof exe
     };
   });
 }
+
+// -------------------------------------------------------------
+// 10. CUS-10: Firma Digital del Contrato de Arrendamiento por Inquilino
+// -------------------------------------------------------------
+const signLeaseSchema = z.object({
+  leaseId: z.string().uuid(),
+  signerFullName: z.string().min(3),
+  consentAccepted: z.literal(true),
+  notes: z.string().optional(),
+});
+
+export async function signLeaseAgreementAction(input: z.infer<typeof signLeaseSchema>) {
+  return safeAction(signLeaseSchema, input, async (data, tenantId, userId) => {
+    const res = await leaseService.signLease({
+      tenantId,
+      userId,
+      leaseId: data.leaseId,
+      signerFullName: data.signerFullName,
+      consentAccepted: data.consentAccepted,
+      notes: data.notes,
+    });
+
+    const lease = await prisma.lease.findUnique({
+      where: { id: data.leaseId },
+      select: { propertyId: true }
+    });
+
+    revalidatePath("/inquilino");
+    revalidatePath("/rentas");
+    if (lease?.propertyId) {
+      revalidatePath(`/propiedades/${lease.propertyId}`);
+    }
+
+    return res;
+  });
+}
+
 
 

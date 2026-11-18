@@ -217,6 +217,10 @@ model Property {
   careVisitIntervalDays Int             @default(15) // Frecuencia de visitas preventivas en días
   lastCareVisitAt       DateTime?
 
+  // CUS-10: Gestión Integral de Rentas (Multitipo Residencial / Comercial / Industrial)
+  propertyType          PropertyType    @default(RESIDENTIAL_APARTMENT)
+  commercialSpecs       Json?           // { rentableAreaM2, parkingSpots, camFeeMonthly, kvaCapacity, loadingDocks, clearHeightMeters }
+
   tenant       Tenant          @relation(fields: [tenantId], references: [id])
   portfolio    Portfolio?      @relation(fields: [portfolioId], references: [id], onDelete: SetNull)
   parent       Property?       @relation("PropertyUnits", fields: [parentId], references: [id], onDelete: SetNull)
@@ -244,6 +248,16 @@ enum OccupancyStatus {
   OWNER_OCCUPIED
   RENTED
   UNDER_MAINTENANCE
+}
+
+enum PropertyType {
+  RESIDENTIAL_APARTMENT
+  RESIDENTIAL_HOUSE
+  BUILDING
+  COMMERCIAL_OFFICE
+  COMMERCIAL_RETAIL
+  INDUSTRIAL_WAREHOUSE
+  OTHER
 }
 
 model PropertyOwner {
@@ -479,6 +493,13 @@ model Lease {
   depositAmount Decimal?
   paymentDay    Int // Day of the month rent is due (e.g. 1)
 
+  // CUS-10: Reglas de Cobranza, Mora y Firma Digital
+  gracePeriodDays    Int?            @default(5)    // Días de gracia antes de aplicar mora
+  lateFeePercentage  Decimal?        // Recargo porcentual sobre la renta (e.g. 5%)
+  lateFeeFixedAmount Decimal?        // Recargo fijo por mora (e.g. $500 MXN)
+  signedAt           DateTime?       // Fecha y hora de firma digital del inquilino
+  signatureAuditJson Json?           // { signedBy, signerEmail, ipAddress, userAgent, consentText, timestamp }
+
   status LeaseStatus @default(DRAFT) // DRAFT -> PENDING_SIGNATURE -> ACTIVE -> ENDED
 
   // Payment Provider bindings
@@ -668,6 +689,8 @@ model Payment {
   method        PaymentMethod @default(TRANSFER)
   reference     String?
   receiptUrl    String?
+  notes         String?
+  reportedById  String?       // Inquilino que reporta el pago
   confirmedAt   DateTime?
   confirmedById String?
   createdAt     DateTime      @default(now())

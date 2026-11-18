@@ -268,5 +268,143 @@ export const chargeService = {
 
       return updatedCharge;
     });
+  },
+
+  /**
+   * CUS-10: Evalúa cargos de renta vencidos y aplica recargos por mora (LATE_FEE)
+   * respetando los días de gracia y reglas estipuladas en el contrato de arrendamiento.
+   */
+  async evaluateAndApplyLateFees(input: {
+    tenantId: string;
+    referenceDate?: Date;
+    createdById?: string;
+  }) {
+    const { tenantId, referenceDate = new Date(), createdById } = input;
+    const accounts = await accountingService.ensureStandardChartOfAccounts(tenantId);
+
+    // Buscar cargos de tipo RENT que estén en status PENDING o PARTIALLY_PAID
+    const unpaidRentCharges = await prisma.charge.findMany({
+      where: {
+        tenantId,
+        type: 'RENT',
+        status: { in: ['PENDING', 'PARTIALLY_PAID'] },
+      },
+      include: {
+        lease: true,
+        property: true,
+      }
+    });
+
+    const createdLateFees = [];
+
+    for (const charge of unpaidRentCharges) {
+      const lease = charge.lease;
+      if (!lease) continue;
+
+      // Calcular días transcurridos desde el dueDate
+      const dueDate = new Date(charge.dueDate);
+      const graceDays = lease.gracePeriodDays ?? 5;
+      const graceDeadline = new Date(dueDate.getTime() + graceDays * 24 * 60 * 60 * 1000);
+
+      // Si aún no vence el periodo de gracia, no aplica mora
+      if (referenceDate <= graceDeadline) {
+        continue;
+      }
+
+      // Determinar monto de la mora
+      let feeAmount = new Prisma.Decimal(0);
+      if (lease.lateFeeFixedAmount && Number(lease.lateFeeFixedAmount) > 0) {
+        feeAmount = new Prisma.Decimal(lease.lateFeeFixedAmount);
+      } else if (lease.lateFeePercentage && Number(lease.lateFeePercentage) > 0) {
+        // Porcentaje sobre el saldo insoluto o renta base
+        const unpaidAmount = new Prisma.Decimal(charge.amount).minus(charge.amountPaid);
+        feeAmount = unpaidAmount
+          .times(new Prisma.Decimal(lease.lateFeePercentage))
+          .dividedBy(100)
+          .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      } else {
+        // Si el contrato no tiene estipulado recargo, no se genera mora
+        continue;
+      }
+
+      if (feeAmount.lessThanOrEqualTo(0)) continue;
+
+      // Clave de idempotencia única para este recargo de mora en este periodo
+      const idempotencyKey = `LATE_FEE_${charge.id}_${charge.periodYear}_${charge.periodMonth}`;
+
+      const appliedFee = await prisma.$transaction(async (tx) => {
+        // Verificar si ya existe el cargo de mora para este cargo de renta
+        const existing = await tx.charge.findFirst({
+          where: {
+            tenantId,
+            leaseId: lease.id,
+            periodYear: charge.periodYear,
+            periodMonth: charge.periodMonth,
+            type: 'LATE_FEE',
+          }
+        });
+
+        if (existing) {
+          return null; // Ya fue aplicado previamente
+        }
+
+        // 1. Crear el cargo de mora
+        const newLateCharge = await tx.charge.create({
+          data: {
+            tenantId,
+            leaseId: lease.id,
+            propertyId: lease.propertyId,
+            concept: `Recargo por mora - Renta ${charge.periodMonth}/${charge.periodYear} (Vencida tras ${graceDays} días de gracia)`,
+            type: 'LATE_FEE',
+            amount: feeAmount,
+            currency: charge.currency,
+            dueDate: referenceDate,
+            periodMonth: charge.periodMonth,
+            periodYear: charge.periodYear,
+            status: 'PENDING',
+          }
+        });
+
+        // 2. Asiento contable de devengo de mora
+        await tx.journalEntry.create({
+          data: {
+            tenantId,
+            idempotencyKey,
+            effectiveDate: referenceDate,
+            description: `Devengo de Mora - Contrato ${lease.id} (${charge.periodMonth}/${charge.periodYear})`,
+            createdById,
+            status: 'POSTED',
+            lines: {
+              create: [
+                {
+                  accountId: accounts.accountsReceivableRenter,
+                  debit: feeAmount,
+                  credit: 0,
+                  currency: charge.currency,
+                  propertyId: lease.propertyId,
+                  leaseId: lease.id,
+                },
+                {
+                  accountId: accounts.ownerFundsPayable,
+                  debit: 0,
+                  credit: feeAmount,
+                  currency: charge.currency,
+                  propertyId: lease.propertyId,
+                  leaseId: lease.id,
+                }
+              ]
+            }
+          }
+        });
+
+        return newLateCharge;
+      });
+
+      if (appliedFee) {
+        createdLateFees.push(appliedFee);
+      }
+    }
+
+    return createdLateFees;
   }
 };

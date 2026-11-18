@@ -26,9 +26,13 @@ export function LeaseList({ initialLeases, properties }: Props) {
   const [searchTerm, setSearchTerm] = useState("")
   const [isModalOpen, setIsModalOpen] = useState(false)
 
+  const [typeFilter, setTypeFilter] = useState<string>("ALL")
+
   const filteredLeases = leases.filter((l) => {
-    return l.renter.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
-           l.property.name.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesSearch = l.renter.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          l.property.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesType = typeFilter === "ALL" || (l.property.propertyType || "RESIDENTIAL_APARTMENT") === typeFilter;
+    return matchesSearch && matchesType;
   })
 
   const handleAuthorize = async (id: string) => {
@@ -50,7 +54,29 @@ export function LeaseList({ initialLeases, properties }: Props) {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h1 className="text-3xl font-bold text-neutral-900 dark:text-white">Rentas e Inquilinos</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button 
+            variant="outline"
+            onClick={async () => {
+              if (!confirm("¿Deseas evaluar contratos con fecha vencida y aplicar recargos por mora estipulados?")) return;
+              try {
+                const { evaluateAndApplyLateFeesAction } = await import("@/app/actions/financial.actions");
+                const res = await evaluateAndApplyLateFeesAction();
+                if (res?.data) {
+                  alert(res.data.message);
+                  window.location.reload();
+                } else if (res?.error) {
+                  alert(res.error);
+                }
+              } catch (e: any) {
+                alert("Error evaluando mora: " + e.message);
+              }
+            }}
+            className="border-amber-500/40 text-amber-600 hover:bg-amber-500/10 text-xs"
+          >
+            <Clock className="mr-1.5 h-3.5 w-3.5" />
+            Evaluar Mora
+          </Button>
           <Button 
             variant="outline"
             onClick={async () => {
@@ -70,16 +96,16 @@ export function LeaseList({ initialLeases, properties }: Props) {
                 alert("Error generando rentas: " + e.message);
               }
             }}
-            className="border-neutral-300 dark:border-neutral-700"
+            className="border-neutral-300 dark:border-neutral-700 text-xs"
           >
-            <Clock className="mr-2 h-4 w-4 text-neutral-600" />
+            <Clock className="mr-1.5 h-3.5 w-3.5 text-neutral-600" />
             Generar Rentas del Mes
           </Button>
           <Button 
             onClick={() => setIsModalOpen(true)}
-            className="bg-[#5955D1] hover:bg-[#4b47b4] text-white"
+            className="bg-[#5955D1] hover:bg-[#4b47b4] text-white text-xs font-semibold"
           >
-            <Plus className="mr-2 h-4 w-4" />
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
             Nuevo Contrato
           </Button>
         </div>
@@ -87,16 +113,29 @@ export function LeaseList({ initialLeases, properties }: Props) {
 
       <Card className="bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800">
         <CardContent className="p-0">
-          <div className="p-4 border-b border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row gap-4">
+          <div className="p-4 border-b border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
               <Input
                 placeholder="Buscar por inquilino o propiedad..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9"
+                className="pl-9 h-9 text-xs"
               />
             </div>
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="h-9 px-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-background text-xs font-medium"
+            >
+              <option value="ALL">Todos los Inmuebles</option>
+              <option value="RESIDENTIAL_APARTMENT">Departamentos</option>
+              <option value="RESIDENTIAL_HOUSE">Casas Residenciales</option>
+              <option value="BUILDING">Edificios Completos</option>
+              <option value="COMMERCIAL_OFFICE">Oficinas Corporativas</option>
+              <option value="COMMERCIAL_RETAIL">Locales Comerciales</option>
+              <option value="INDUSTRIAL_WAREHOUSE">Bodegas y Naves</option>
+            </select>
           </div>
 
           <div className="overflow-x-auto">

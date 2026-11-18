@@ -137,5 +137,94 @@ export const leaseService = {
       where: { id: leaseId },
       data: { status: "PENDING_SIGNATURE" }
     });
+  },
+
+  /**
+   * CUS-10: Firma digital de contrato por el inquilino o administración
+   */
+  async signLease(params: {
+    tenantId: string;
+    userId: string;
+    leaseId: string;
+    signerFullName: string;
+    consentAccepted: boolean;
+    notes?: string;
+  }) {
+    const { tenantId, userId, leaseId, signerFullName, notes } = params;
+
+    const lease = await prisma.lease.findUnique({
+      where: { id: leaseId, tenantId },
+      include: { renter: true, property: true }
+    });
+
+    if (!lease) {
+      throw new Error("Contrato de arrendamiento no encontrado.");
+    }
+
+    const isRenter = lease.renterId === userId || lease.renter?.email === userId;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const isManager = user?.role === "ADMIN" || user?.role === "MANAGER" || user?.role === "SUPER_ADMIN";
+
+    if (!isRenter && !isManager) {
+      throw new Error("No tienes autorización para firmar este contrato de arrendamiento.");
+    }
+
+    if (lease.status === "ACTIVE") {
+      return {
+        leaseId: lease.id,
+        status: "ACTIVE",
+        alreadySigned: true,
+        message: "El contrato ya se encuentra activo y firmado."
+      };
+    }
+
+    const signedAt = new Date();
+    const signatureAudit = {
+      signedByUserId: userId,
+      signerFullName,
+      signedAt: signedAt.toISOString(),
+      consentText: "He leído y acepto expresamente los términos, vigencia, importe de renta y condiciones del contrato de arrendamiento.",
+      notes: notes || null,
+    };
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedLease = await tx.lease.update({
+        where: { id: lease.id },
+        data: {
+          status: "ACTIVE",
+          signedAt,
+          signatureAuditJson: signatureAudit,
+        }
+      });
+
+      await tx.property.update({
+        where: { id: lease.propertyId },
+        data: { occupancyStatus: "RENTED" }
+      });
+
+      await tx.contractDocument.create({
+        data: {
+          tenantId,
+          leaseId: lease.id,
+          type: "LEASE_AGREEMENT",
+          title: `Contrato de Arrendamiento Firmado Digitalmente (${signerFullName})`,
+          metadata: {
+            ...signatureAudit,
+            rentAmount: Number(lease.rentAmount),
+            startDate: lease.startDate.toISOString(),
+            endDate: lease.endDate.toISOString(),
+          }
+        }
+      });
+
+      return updatedLease;
+    });
+
+    return {
+      leaseId: updated.id,
+      status: updated.status,
+      signedAt: updated.signedAt,
+      message: "¡Contrato firmado y activado con éxito!",
+    };
   }
 };

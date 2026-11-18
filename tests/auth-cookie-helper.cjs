@@ -4,27 +4,44 @@ const DEMO_PASSWORD = process.env.DEMO_USER_PASSWORD || 'DemoCustodia2026!';
 const SUPABASE_HOST = 'ptfejkjyxrcmxslpuexo.supabase.co';
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-function login(email) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({ email, password: DEMO_PASSWORD });
-    const req = https.request({
-      hostname: SUPABASE_HOST,
-      path: '/auth/v1/token?grant_type=password',
-      method: 'POST',
-      headers: {
-        'apikey': ANON_KEY,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data)
-      }
-    }, res => {
-      let body = '';
-      res.on('data', d => body += d);
-      res.on('end', () => resolve(JSON.parse(body)));
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
+async function login(email, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const data = JSON.stringify({ email, password: DEMO_PASSWORD });
+        const req = https.request({
+          hostname: SUPABASE_HOST,
+          path: '/auth/v1/token?grant_type=password',
+          method: 'POST',
+          headers: {
+            'apikey': ANON_KEY,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(data)
+          },
+          timeout: 10000
+        }, res => {
+          let body = '';
+          res.on('data', d => body += d);
+          res.on('end', () => {
+            try {
+              resolve(JSON.parse(body));
+            } catch (err) {
+              reject(err);
+            }
+          });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => {
+          req.destroy(new Error('Request timed out'));
+        });
+        req.write(data);
+        req.end();
+      });
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+    }
+  }
 }
 
 async function getCookies(email) {

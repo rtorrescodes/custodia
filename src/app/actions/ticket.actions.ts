@@ -79,3 +79,59 @@ export async function deleteTicket(input: z.infer<typeof deleteTicketSchema>) {
     return { success: true }
   })
 }
+
+// 4. CUS-10: Creación de ticket de mantenimiento reportado por el Inquilino desde su portal
+const tenantTicketSchema = z.object({
+  propertyId: z.string().uuid("Seleccione una propiedad válida"),
+  title: z.string().min(3, "El título debe tener al menos 3 caracteres"),
+  description: z.string().min(5, "Describa la falla con al menos 5 caracteres"),
+  urgency: z.enum(["LOW", "MEDIUM", "HIGH", "EMERGENCY"]).default("MEDIUM"),
+})
+
+export async function createTenantMaintenanceRequestAction(input: z.infer<typeof tenantTicketSchema>) {
+  return safeAction(tenantTicketSchema, input, async (data, tenantId, userId) => {
+    // Verificar que la propiedad pertenezca al tenant
+    const prop = await prisma.property.findUnique({
+      where: { id: data.propertyId, tenantId },
+      include: {
+        leases: {
+          where: { status: "ACTIVE" },
+          take: 1,
+        }
+      }
+    })
+
+    if (!prop) {
+      throw new Error("Propiedad no encontrada o no autorizada.")
+    }
+
+    const priorityMap: Record<string, "LOW" | "MEDIUM" | "HIGH" | "EMERGENCY"> = {
+      LOW: "LOW",
+      MEDIUM: "MEDIUM",
+      HIGH: "HIGH",
+      EMERGENCY: "EMERGENCY",
+    }
+
+    const newTicket = await prisma.workOrder.create({
+      data: {
+        tenantId,
+        propertyId: data.propertyId,
+        title: `[Reporte Inquilino] ${data.title}`,
+        description: data.description,
+        priority: priorityMap[data.urgency] || "MEDIUM",
+        status: "PENDING",
+        reporterId: userId,
+      }
+    })
+
+    revalidatePath("/inquilino")
+    revalidatePath("/mantenimiento")
+    revalidatePath(`/propiedades/${data.propertyId}`)
+
+    return {
+      ticket: newTicket,
+      message: "¡Incidencia reportada con éxito! La administración ha sido notificada.",
+    }
+  })
+}
+

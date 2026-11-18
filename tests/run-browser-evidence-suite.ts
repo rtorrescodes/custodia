@@ -127,15 +127,18 @@ async function runBrowserEvidenceSuite() {
     assert.ok(submitBtn, "El botón submit del modal debe estar presente");
     await submitBtn.click();
 
-    // Esperar mensaje de éxito o cierre del modal
-    await new Promise(r => setTimeout(r, 2500));
+    // Esperar mensaje de éxito o cierre del modal y confirmación en BD
+    let dbReported: any = null;
+    for (let waitAttempt = 0; waitAttempt < 10; waitAttempt++) {
+      await new Promise(r => setTimeout(r, 1000));
+      dbReported = (await pool.query(
+        `SELECT id, status, reference, "reportedAmount", "evidenceUrl" FROM "OwnerContribution" WHERE id = $1`,
+        [targetContrib.id]
+      )).rows[0];
+      if (dbReported?.status === "REPORTED") break;
+    }
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "demo_03_transferencia_reportada_exito.png"), fullPage: true });
 
-    // Verificar en BD que el estado cambió a REPORTED y que el importe persistido es exactamente 6500
-    const dbReported = (await pool.query(
-      `SELECT id, status, reference, "reportedAmount", "evidenceUrl" FROM "OwnerContribution" WHERE id = $1`,
-      [targetContrib.id]
-    )).rows[0];
     console.log("Estado persistido en PostgreSQL tras reporte del dueño:", dbReported);
     assert.strictEqual(dbReported?.status, "REPORTED", "La aportación debe quedar en status REPORTED tras el envío");
     assert.strictEqual(Number(dbReported?.reportedAmount), 6500, "El importe reportado persistido debe ser exactamente 6500");
@@ -252,19 +255,19 @@ async function runBrowserEvidenceSuite() {
     assert.notStrictEqual(targetStay.status, "COMPLETED", "La llegada debe comenzar en estado no-COMPLETED (bloqueada por checklist)");
 
     // 2. PM abre pestaña 'Llegadas & Estancias' y asigna tarea de preparación a proveedor@demo.custodia.app
-    await page.goto(`${BASE_URL}/propiedades/${PROPERTY_ID}`, { waitUntil: "networkidle2" });
+    await new Promise(r => setTimeout(r, 1000));
     await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll("button[role='tab']"));
-      const tab = tabs.find(t => t.textContent && t.textContent.includes("Llegadas & Estancias"));
+      const allButtons = Array.from(document.querySelectorAll("button"));
+      const tab = allButtons.find(b => b.textContent && b.textContent.includes("Llegadas & Estancias"));
       if (tab) (tab as HTMLButtonElement).click();
     });
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 2000));
 
     // PM busca botón 'Asignar tarea'
     let clickedAssignBtn = false;
     for (const b of await page.$$("button")) {
       const text = await page.evaluate(el => el.textContent, b);
-      if (text && (text.includes("Asignar tarea") || text.includes("Asignar Tarea"))) {
+      if (text && (text.includes("Asignar tarea") || text.includes("Asignar Tarea") || text.includes("Assign preparation task"))) {
         await b.click();
         clickedAssignBtn = true;
         await new Promise(r => setTimeout(r, 1000));

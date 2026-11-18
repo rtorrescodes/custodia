@@ -180,3 +180,122 @@ export async function confirmBankMatchAction(input: z.infer<typeof confirmBankMa
     return result
   })
 }
+
+// 8. CUS-10: Reporte de pago de renta por el inquilino (SPEI / Transferencia / Depósito)
+const reportTenantPaymentSchema = z.object({
+  leaseId: z.string().uuid(),
+  amount: z.number().positive(),
+  reference: z.string().min(3),
+  method: z.enum(["TRANSFER", "CASH", "CARD", "OTHER"]).default("TRANSFER"),
+  notes: z.string().optional(),
+  receiptUrl: z.string().optional(),
+  fileBase64: z.string().optional(),
+  fileName: z.string().optional(),
+  fileMimeType: z.string().optional(),
+})
+
+export async function reportTenantPaymentAction(input: z.infer<typeof reportTenantPaymentSchema>) {
+  return safeAction(reportTenantPaymentSchema, input, async (data, tenantId, userId) => {
+    const { prisma } = await import("@/lib/prisma")
+    const lease = await prisma.lease.findUnique({
+      where: { id: data.leaseId, tenantId },
+      include: { renter: true, property: true }
+    })
+
+    if (!lease) {
+      throw new Error("Contrato de arrendamiento no encontrado.")
+    }
+
+    // Permitir si es el inquilino o un administrador
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    const isRenter = lease.renterId === userId || user?.email === lease.renter?.email
+    const isManager = user?.role === "ADMIN" || user?.role === "MANAGER" || user?.role === "SUPER_ADMIN"
+
+    if (!isRenter && !isManager) {
+      throw new Error("No tienes autorización para reportar pagos en este contrato.")
+    }
+
+    let finalReceiptUrl = data.receiptUrl || null
+
+    // Si se adjunta archivo en base64, subirlo a almacenamiento privado
+    if (data.fileBase64 && data.fileName && data.fileMimeType) {
+      const { evidenceStorageService } = await import("@/lib/services/evidence-storage")
+      const buffer = Buffer.from(data.fileBase64, "base64")
+      const uploadRes = await evidenceStorageService.uploadFile({
+        tenantId,
+        propertyId: lease.propertyId,
+        filename: data.fileName,
+        buffer,
+        mimeType: data.fileMimeType,
+      })
+      finalReceiptUrl = uploadRes.path
+    }
+
+    const payerName = user?.email || lease.renter?.email || "Inquilino"
+
+    const payment = await paymentService.recordPayment({
+      tenantId,
+      leaseId: lease.id,
+      payerName,
+      amount: data.amount,
+      currency: lease.currency,
+      method: data.method,
+      reference: data.reference,
+      receiptUrl: finalReceiptUrl || undefined,
+      autoConfirm: false, // Queda en REPORTED para revisión del casero/PM
+    })
+
+    // Actualizar campos adicionales en el Payment
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        notes: data.notes || null,
+        reportedById: userId,
+      }
+    })
+
+    revalidatePath("/inquilino")
+    revalidatePath("/rentas")
+    revalidatePath(`/propiedades/${lease.propertyId}`)
+
+    return {
+      paymentId: payment.id,
+      status: payment.status,
+      amount: Number(payment.amount),
+      reference: payment.reference,
+      message: "¡Comprobante de pago enviado! Pendiente de confirmación por administración.",
+    }
+  })
+}
+
+// 9. CUS-10: Evaluación y aplicación periódica de mora / recargos
+const applyLateFeesSchema = z.object({
+  referenceDate: z.string().optional(),
+})
+
+export async function evaluateAndApplyLateFeesAction(input: z.infer<typeof applyLateFeesSchema> = {}) {
+  return safeAction(applyLateFeesSchema, input, async (data, tenantId, userId) => {
+    const auth = await resolveMembershipContext(userId, tenantId)
+    if (!auth.ok) throw new Error(auth.error)
+
+    if (auth.context.role !== "PM_ADMIN" && auth.context.role !== "LANDLORD") {
+      throw new Error("Solo administradores pueden evaluar y aplicar recargos por mora.")
+    }
+
+    const refDate = data.referenceDate ? new Date(data.referenceDate) : new Date()
+    const appliedFees = await chargeService.evaluateAndApplyLateFees({
+      tenantId,
+      referenceDate: refDate,
+      createdById: userId,
+    })
+
+    revalidatePath("/rentas")
+    revalidatePath("/inquilino")
+
+    return {
+      count: appliedFees.length,
+      appliedFees,
+      message: `Se aplicaron ${appliedFees.length} recargos por mora en contratos con fecha vencida.`,
+    }
+  })
+}

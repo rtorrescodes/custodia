@@ -37,6 +37,8 @@ export function LeaseFormModal({ properties, onClose, onSuccess }: Props) {
       rentAmount: Number(formData.get("rentAmount")),
       depositAmount: Number(formData.get("depositAmount")),
       paymentDay: Number(formData.get("paymentDay")),
+      gracePeriodDays: Number(formData.get("gracePeriodDays") || 5),
+      lateFeeFixedAmount: formData.get("lateFeeFixedAmount") ? Number(formData.get("lateFeeFixedAmount")) : undefined,
     }
 
     if (!data.propertyId) {
@@ -137,6 +139,19 @@ export function LeaseFormModal({ properties, onClose, onSuccess }: Props) {
               <div className="space-y-2">
                 <Label htmlFor="paymentDay">Día de Cobro</Label>
                 <Input id="paymentDay" name="paymentDay" type="number" min="1" max="31" required placeholder="Ej. 1" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+              <div className="space-y-2">
+                <Label htmlFor="gracePeriodDays">Días de Gracia para Pago</Label>
+                <Input id="gracePeriodDays" name="gracePeriodDays" type="number" min="0" max="30" defaultValue="5" placeholder="5" />
+                <p className="text-[11px] text-muted-foreground">Días tras el vencimiento antes de generar mora.</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="lateFeeFixedAmount">Recargo Fijo por Mora ($ MXN)</Label>
+                <Input id="lateFeeFixedAmount" name="lateFeeFixedAmount" type="number" min="0" step="0.01" defaultValue="500" placeholder="Ej. 500" />
+                <p className="text-[11px] text-muted-foreground">Cobro adicional si el inquilino paga a destiempo.</p>
               </div>
             </div>
           </div>

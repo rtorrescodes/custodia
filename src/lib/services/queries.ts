@@ -765,14 +765,45 @@ export async function getRenterPortalData(requestedTenantId?: string) {
 
   return withTenantRLS(tenantId, async (tx) => {
     const leases = await tx.lease.findMany({
-      where: { renterId: session.user.id },
+      where: {
+        OR: [
+          { renterId: session.user.id },
+          { renter: { email: session.user.email } },
+        ]
+      },
       include: {
         property: true,
         evidences: true,
-      }
+        charges: {
+          orderBy: { dueDate: "desc" },
+        },
+        payments: {
+          include: { receipt: true },
+          orderBy: { createdAt: "desc" },
+        },
+        contractDocuments: {
+          orderBy: { createdAt: "desc" },
+        },
+      },
+      orderBy: { createdAt: "desc" },
     });
 
-    return leases;
+    const activePropertyIds = leases.map(l => l.propertyId);
+
+    // Obtener órdenes de trabajo (incidencias) de las propiedades donde arrienda
+    const maintenanceTickets = await tx.workOrder.findMany({
+      where: {
+        propertyId: { in: activePropertyIds },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+
+    return {
+      leases,
+      maintenanceTickets,
+      user: session.user,
+    };
   });
 }
 
